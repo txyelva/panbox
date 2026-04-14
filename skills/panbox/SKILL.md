@@ -24,7 +24,7 @@ description: 网盘入库 — 把夸克/阿里云盘/115网盘/百度网盘分�
 ## CLI
 
 ```bash
-/Users/ttpg/Documents/Claude/kuakeauto/panbox/.venv/bin/panbox ingest <URL> \
+panbox ingest <URL> \
     [--hint "准确剧名"] \
     [--type movie|tv] \
     [--passcode XXXX] \

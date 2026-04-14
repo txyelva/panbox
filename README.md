@@ -21,7 +21,7 @@ panbox ingest https://pan.quark.cn/s/xxx?pwd=yyyy --hint "凡人修仙传 第二
 ## 安装
 
 ```bash
-git clone https://github.com/ttpg/panbox.git
+git clone https://github.com/txyelva/panbox.git
 cd panbox
 python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate

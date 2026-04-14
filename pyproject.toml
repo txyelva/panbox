@@ -21,8 +21,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ttpg/panbox"
-Issues = "https://github.com/ttpg/panbox/issues"
+Homepage = "https://github.com/txyelva/panbox"
+Issues = "https://github.com/txyelva/panbox/issues"
 
 [project.scripts]
 panbox = "panbox.cli:main"
