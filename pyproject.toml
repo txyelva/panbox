@@ -1,0 +1,36 @@
+[project]
+name = "panbox"
+version = "0.1.0"
+description = "Cloud drive share → TMDB scrape → Plex/Emby media library, all in one command"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["plex", "emby", "media", "tmdb", "quark", "alipan", "115", "baidu", "nfo"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "urllib3<2",
+    "guessit>=3.8",
+    "rich>=13.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/ttpg/panbox"
+Issues = "https://github.com/ttpg/panbox/issues"
+
+[project.scripts]
+panbox = "panbox.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["panbox*"]
