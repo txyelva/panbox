@@ -18,14 +18,44 @@ panbox ingest https://pan.quark.cn/s/xxx?pwd=yyyy --hint "凡人修仙传 第二
 
 ---
 
+## 架构说明
+
+panbox 由两部分组成，缺一不可：
+
+```
+用户 → Agent (Claude Code / OpenClaw / Hermes / ...) 
+           ↓  读取 skills/panbox/SKILL.md（告诉 Agent 怎么调用）
+       panbox CLI（本地安装，真正发起 API 请求、操作云盘）
+           ↓
+       ~/.config/panbox/config.yaml（本地凭据，永不上传）
+```
+
+**Skill 文件是纯文本提示词**，告诉 Agent 在什么时候调用哪条命令、如何解析结果。  
+**panbox CLI 是实际执行者**，负责所有网络请求和文件操作。
+
+> 因此，仅复制 Skill 文件是不够的——本机必须安装 panbox CLI 并填好配置，Skill 才能工作。
+
+---
+
 ## 安装
+
+### 一键安装（推荐）
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/txyelva/panbox/main/install.sh)
+```
+
+脚本会自动完成：下载代码 → 创建虚拟环境 → 安装依赖 → 生成配置模板 → 检测并安装 Agent Skill（Claude Code / OpenClaw / Hermes）。
+
+### 手动安装
 
 ```bash
 git clone https://github.com/txyelva/panbox.git
 cd panbox
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e .
+panbox config init
 ```
 
 > Python ≥ 3.9 required
@@ -164,22 +194,31 @@ panbox config path
 
 ---
 
-## 与 Claude Code 集成
+## Agent 集成
 
-安装 [Claude Code](https://claude.ai/code) 后，复制 Skill 文件：
+一键安装脚本会自动检测并安装 Skill。手动安装请参考下表：
+
+| Agent | Skill 目录 |
+|-------|-----------|
+| [Claude Code](https://claude.ai/code) | `~/.claude/skills/panbox/` |
+| [OpenClaw](https://openclaw.ai) | `~/.openclaw/skills/panbox/` |
+| Hermes | `~/.hermes/skills/panbox/` |
 
 ```bash
+# 示例（Claude Code）
 mkdir -p ~/.claude/skills/panbox
 cp skills/panbox/SKILL.md ~/.claude/skills/panbox/SKILL.md
 ```
 
-之后在 Claude Code 里直接丢链接即可：
+安装后，在任意支持的 Agent 里直接丢链接即可：
 
 ```
 https://pan.quark.cn/s/abc 凡人修仙传 第二季 4K
 ```
 
-Claude 会自动走 dry-run → 展示识别结果 → 确认后入库的完整流程。
+Agent 会自动走 dry-run → 展示识别结果 → 确认后入库的完整流程。
+
+**兼容性说明**：Skill 文件本质是给 LLM 看的提示词，任何支持 Bash 工具调用的 Agent 均可使用，不限于上表列出的几款。
 
 ---
 

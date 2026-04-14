@@ -1,9 +1,15 @@
 ---
 name: panbox
 description: 网盘入库 — 把夸克/阿里云盘/115网盘/百度网盘分享链接自动转存、TMDB 识别、按 Plex/Emby 布局重命名落库,每集自动生成 NFO + 缩略图。遇到已有剧集只补新集。触发词:pan.quark.cn、alipan.com、aliyundrive.com、115.com、115cdn.com、pan.baidu.com、夸克分享、阿里云盘、115分享、百度分享、入库、刮削、转存归档。
+agents: [claude-code, openclaw, hermes, any-bash-capable-agent]
+requires: panbox CLI (https://github.com/txyelva/panbox)
 ---
 
 # panbox — 网盘入库
+
+> **适用 Agent**:Claude Code · OpenClaw · Hermes · 任何支持 Bash 工具调用的 Agent
+>
+> **前提**:本机已安装 `panbox` CLI 并完成配置。一键安装见 [install.sh](https://github.com/txyelva/panbox)
 
 一条命令完成「转存 → 识别 → 落库 → 刮削」:`panbox ingest <URL> --hint "<准确名>" --json`。根据 URL 自动选云盘(夸克 / 阿里云盘 / 115 / 百度网盘),落库后自动写 `tvshow.nfo` / `movie.nfo`、poster/fanart、每集 `episodedetails` NFO 和缩略图(TMDB 有图时)。
 
