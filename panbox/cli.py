@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import asdict
+from dataclasses import asdict as _asdict
 
 import click
 from rich.console import Console
 from rich.table import Table
-
-from dataclasses import asdict as _asdict
 
 from .clouds import parse_share_url as cloud_parse_share_url
 from .config import Config, DEFAULT_CONFIG_PATH

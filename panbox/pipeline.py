@@ -149,6 +149,18 @@ def ingest(
             message=f"TMDB 未找到:{query} (year={pick.year} type={mt})",
         )
 
+    # 未指定年份时,同名候选按年份倒序(离现在最近的优先),非同名按热度保持原序
+    if pick.year is None:
+        query_lower = query.strip().lower()
+        def _sort_key(c: TMDBResult) -> tuple:
+            title_match = (
+                c.title.lower() == query_lower
+                or c.original_title.lower() == query_lower
+            )
+            year_int = int(c.year) if c.year and c.year.isdigit() else 0
+            return (not title_match, -year_int, -c.popularity)
+        candidates = sorted(candidates, key=_sort_key)
+
     if (
         not auto_yes
         and len(candidates) > 1
@@ -210,6 +222,17 @@ def ingest(
     staged_videos: list[tuple[RemoteFile, Optional[int]]] = []
     deadline = time.time() + 90
     last_count = -1
+    no_progress = 0          # 连续无进展次数,用于退避
+
+    def _poll_sleep(changed: bool) -> None:
+        """有进展 → 1.5s;连续无进展时指数退避,最长 10s。"""
+        nonlocal no_progress
+        if changed:
+            no_progress = 0
+            time.sleep(1.5)
+        else:
+            no_progress += 1
+            time.sleep(min(1.5 * (2 ** (no_progress - 1)), 10))
 
     if saved_top_fids:
         # 夸克/阿里:用返回的新 fid 集合精确定位
@@ -220,13 +243,11 @@ def ingest(
                 break
             if time.time() >= deadline:
                 break
-            if len(staged_videos) == last_count:
-                time.sleep(3)
-            else:
-                last_count = len(staged_videos)
-                time.sleep(1.5)
+            changed = len(staged_videos) != last_count
+            last_count = len(staged_videos)
+            _poll_sleep(changed)
     else:
-        # 115 等:扫 staging 里快照之后新增的顶层条目
+        # 115/百度等:扫 staging 里快照之后新增的顶层条目
         while True:
             new_fids = {
                 f.fid for f in qc.list_dir(staging_fid)
@@ -238,11 +259,9 @@ def ingest(
                 break
             if time.time() >= deadline:
                 break
-            if len(staged_videos) == last_count:
-                time.sleep(3)
-            else:
-                last_count = len(staged_videos)
-                time.sleep(1.5)
+            changed = len(staged_videos) != last_count
+            last_count = len(staged_videos)
+            _poll_sleep(changed)
 
     if not staged_videos:
         return IngestResult(

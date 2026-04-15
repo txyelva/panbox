@@ -318,7 +318,7 @@ class Drive115Client(Cloud):
             return str((init_data.get("fileinfo") or {}).get("fid") or "")
 
         # status=1 或无 status(直接给了 OSS 凭据)→ 需要实际上传
-        if init_data.get("status") not in (1, None) and "host" not in init_data:
+        if init_data.get("status") not in (1, None) or "host" not in init_data:
             raise CloudError(f"115 upload init 返回异常: {init_data}")
 
         oss_url: str = init_data.get("host") or ""

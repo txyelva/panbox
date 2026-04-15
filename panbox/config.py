@@ -90,7 +90,7 @@ class Config:
         ali_raw = clouds.get("ali") or {}
         d115_raw = clouds.get("115") or clouds.get(115) or {}
         baidu_raw = clouds.get("baidu") or {}
-        return cls(
+        cfg = cls(
             tmdb=TMDBConfig(**raw["tmdb"]),
             quark=QuarkConfig(**quark_raw),
             ali=AliConfig(**ali_raw),
@@ -98,3 +98,25 @@ class Config:
             baidu=BaiduConfig(**baidu_raw),
             policy=PolicyConfig(**(raw.get("policy") or {})),
         )
+        cfg._validate()
+        return cfg
+
+    def _validate(self) -> None:
+        """校验已配置凭据的云盘路径字段不能为空。"""
+        _PATH_FIELDS = ("staging_movies", "staging_tv", "library_movies", "library_tv")
+        checks = [
+            ("quark",   self.quark,   self.quark.cookie),
+            ("ali",     self.ali,     self.ali.refresh_token),
+            ("115",     self.drive115, self.drive115.cookie),
+            ("baidu",   self.baidu,   self.baidu.cookie),
+        ]
+        errors = []
+        for name, cloud_cfg, credential in checks:
+            if not credential:
+                continue  # 未启用该云盘,跳过
+            for field in _PATH_FIELDS:
+                val = getattr(cloud_cfg, field, None)
+                if not val or not isinstance(val, str):
+                    errors.append(f"clouds.{name}.{field} 未设置(凭据已填但路径为空)")
+        if errors:
+            raise ValueError("配置校验失败:\n  " + "\n  ".join(errors))
