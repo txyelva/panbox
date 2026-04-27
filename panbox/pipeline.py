@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -218,6 +219,10 @@ def ingest(
     staging_snapshot: set[str] = {f.fid for f in qc.list_dir(staging_fid)}
     saved_top_fids = qc.save_share(pwd_id, stoken, fid_list, token_list, staging_fid)
 
+    # ---- 5.5 确保 staging 目录季号与 hint 一致 ----
+    if season_hint is not None and saved_top_fids:
+        _ensure_staging_season_match(qc, staging_fid, set(saved_top_fids), season_hint)
+
     # ---- 6. 收集已转存的视频(轮询等待异步 copy) ----
     staged_videos: list[tuple[RemoteFile, Optional[int]]] = []
     deadline = time.time() + 90
@@ -416,6 +421,55 @@ def _cleanup_empty(qc: Cloud, staging_fid: str, top_fids: set[str]) -> None:
             qc.delete(to_delete)
         except Exception:
             pass
+
+
+def _ensure_staging_season_match(
+    qc: Cloud,
+    staging_fid: str,
+    top_fids: set[str],
+    season_hint: int,
+) -> None:
+    """转存后检查 staging 目录季号是否与 hint 一致。
+
+    逻辑:
+    - 目录季号正确(= hint) → 不动
+    - 目录季号错误(≠ hint) → 改成正确季号
+    - 目录无季号 → 加上正确季号
+
+    只处理本次转存的顶层目录(top_fids),不动 staging 里其他已有内容。
+    注意:仅适用于 save_share 返回 fid 列表的云盘(夸克/阿里);
+    115/百度返回空列表,此步骤跳过,为已知限制。
+    """
+    try:
+        children = qc.list_dir(staging_fid)
+    except Exception:
+        return
+
+    for c in children:
+        if not c.is_dir:
+            continue
+        if c.fid not in top_fids:
+            continue
+
+        parsed = parse_season_from_name(c.name)
+
+        if parsed is not None:
+            if parsed == season_hint:
+                continue  # 正确,无需处理
+            # 季号错误:替换为正确季号
+            new_name = re.sub(r'第\s*\d+\s*季', f'第{season_hint}季', c.name)
+            new_name = re.sub(r'[Ss]eason\s*\d+', f'Season {season_hint}', new_name)
+            new_name = re.sub(r'\b[sS]\d{1,2}\b', f'S{season_hint:02d}', new_name)
+            if new_name == c.name:  # 正则没匹配到,直接加后缀
+                new_name = f"{c.name} 第{season_hint}季"
+        else:
+            # 无季号:加上正确季号
+            new_name = f"{c.name} 第{season_hint}季"
+
+        try:
+            qc.rename(c.fid, new_name)
+        except Exception:
+            pass  # 重命名失败不影响主流程
 
 
 def _finalize_movie(
