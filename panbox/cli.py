@@ -163,6 +163,9 @@ def identify(
 @click.option("--hint", help="剧名或电影名提示(如 '凡人修仙传 第二季')")
 @click.option("--type", "media_type", type=click.Choice(["movie", "tv"]))
 @click.option("--passcode", help="分享提取码")
+@click.option("--tmdb-id", type=int, help="跳过搜索,直接使用指定 TMDB ID")
+@click.option("--season", type=int, help="指定 TV season 号(常与 --tmdb-id/--variety 搭配)")
+@click.option("--variety", is_flag=True, help="综艺严格模式:按 TMDB 集数反向匹配正片,排除加更/花絮等")
 @click.option("--yes", "auto_yes", is_flag=True, help="自动选择热度最高的 TMDB 结果")
 @click.option("--dry-run", is_flag=True, help="只识别+输出目标路径,不转存")
 @click.option("--json", "as_json", is_flag=True)
@@ -171,6 +174,9 @@ def ingest(
     hint: str | None,
     media_type: str | None,
     passcode: str | None,
+    tmdb_id: int | None,
+    season: int | None,
+    variety: bool,
     auto_yes: bool,
     dry_run: bool,
     as_json: bool,
@@ -198,6 +204,9 @@ def ingest(
             passcode=passcode,
             auto_yes=auto_yes,
             dry_run=dry_run,
+            tmdb_id=tmdb_id,
+            season=season,
+            variety=variety,
         )
     except Exception as e:
         if as_json:
@@ -224,6 +233,20 @@ def ingest(
         console.print(f"目标: {result.path}")
     if result.added:
         console.print(f"[green]入库 {len(result.added)}[/green]: " + ", ".join(result.added))
+    if result.planned:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("EP")
+        table.add_column("Source")
+        table.add_column("Target")
+        table.add_column("Score")
+        for row in result.planned:
+            table.add_row(
+                str(row.get("episode", "")),
+                str(row.get("source", "")),
+                str(row.get("target", "")),
+                str(row.get("score", "")),
+            )
+        console.print(table)
     if result.skipped:
         console.print(f"[yellow]跳过 {len(result.skipped)}[/yellow]: " + ", ".join(result.skipped))
     if result.candidates:

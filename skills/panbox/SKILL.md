@@ -33,6 +33,9 @@ requires: panbox CLI (https://github.com/txyelva/panbox)
 panbox ingest <URL> \
     [--hint "准确剧名"] \
     [--type movie|tv] \
+    [--tmdb-id 12345] \
+    [--season 14] \
+    [--variety] \
     [--passcode XXXX] \
     [--yes] \
     [--dry-run] \
@@ -53,13 +56,65 @@ panbox ingest <URL> \
 | `added` | 本次入库的文件名列表 |
 | `skipped` | 被跳过(库里已有或解析失败)的文件 |
 | `candidates` | `status=need_confirm` 时的候选 TMDB 结果,含 `tmdb_id/title/year/type/overview` |
+| `planned` | dry-run 计划映射,综艺严格模式下含 `episode/source/target/score/reasons` |
 | `message` | 补充说明或错误信息 |
+
+## 综艺严格模式
+
+遇到综艺，尤其是分享里混有正片、加更、会员版、花絮、彩蛋、纯享、直播、训练室、发布会等内容时，优先让用户提供或自行识别 TMDB season URL，然后用 TMDB 集数反向匹配文件。
+
+TMDB season URL 形如:
+
+```
+https://www.themoviedb.org/tv/98031/season/14
+```
+
+从中提取:
+
+- `--tmdb-id 98031`
+- `--season 14`
+- `--type tv`
+- `--variety`
+
+命令示例:
+
+```bash
+panbox ingest "https://www.alipan.com/s/QZF6jNbfX55" \
+  --tmdb-id 98031 \
+  --season 14 \
+  --type tv \
+  --variety \
+  --dry-run \
+  --json
+```
+
+`--variety` 会先读取 TMDB season 的 episode 列表，再用以下信号匹配网盘文件:
+
+- air date: `20260424`、`2026.04.24`、`26.04.24`
+- 期数/集数: `第1期`、`第一期`、`第 2 集`
+- 上中下: `第1期上`、`第1期：初舞台（下）`
+- 标题关键词: 如 `初舞台`、`撕名牌`、`一公`
+
+如果文件日期与 TMDB air date 只差 1 天，只有在期数/上下也匹配时才接受，用来兼容网盘文件写上传日期或次日日期的情况。
+
+并主动排除常见衍生内容: `加更`、`会员`、`彩蛋`、`精华`、`花絮`、`预告`、`直播`、`发布会`、`跑男来了`、`训练室`、`全纪录`、`纯享`、`超前企划`、`火锅局`、`天真时间`、`姐姐请上车`、`红毯`、`倒计时`、`运动会` 等。
+
+### 综艺特殊案例
+
+**奔跑吧**: TMDB 的 season 号和官方季名不一致时，以 TMDB season URL 为准。例如 `tv/98031/season/14` 的 season 号是 14，但 TMDB season 名可能是“奔跑吧 第10季”。网盘文件常只有日期和“第几期”，必须用 `--tmdb-id 98031 --season 14 --variety`。
+
+**乘风/浪姐**: 同一季可能既在老条目 `乘风破浪的姐姐` 下作为 S07，也可能有单独条目 `乘风2026` 作为 S01。用户给了 TMDB URL 时必须尊重 URL:
+
+- `https://www.themoviedb.org/tv/104716/season/7` → `--tmdb-id 104716 --season 7`
+- 如果用户明确选择单独的 `乘风2026` 条目 → 用该条目的 TMDB ID 和 `--season 1`
 
 ## 标准流程
 
 ### 1. 提取 URL 和 hint
 
-从用户消息里拿两样东西:
+从用户消息里拿这些信息:
+
+- **TMDB season URL**:如果用户同时给了 TMDB 链接,优先提取 `tmdb_id` 和 `season`,并在 dry-run 中加 `--variety`
 
 - **URL**:直接拿原始链接,含密码参数一起传(工具自动提取)
   - 夸克:`https://pan.quark.cn/s/XXXXXX?pwd=yyyy`
@@ -85,6 +140,12 @@ hint 里可以保留季度、年份、画质 tag(S01E01、(2026)、4K、WEB-DL),
 panbox ingest <URL> --hint "<hint>" --yes --dry-run --json
 ```
 
+如果有 TMDB season URL:
+
+```bash
+panbox ingest <URL> --tmdb-id <id> --season <season> --type tv --variety --dry-run --json
+```
+
 ### 3. 根据结果分支
 
 **`status: ok`**:给用户展示识别结果,问一句确认:
@@ -93,6 +154,8 @@ panbox ingest <URL> --hint "<hint>" --yes --dry-run --json
 目标路径:{path}
 要入库吗?
 ```
+
+如果返回 `planned`,必须展示 source → target 的映射,方便用户确认综艺正片是否选对。
 
 **`status: need_confirm`**:把 `candidates` 展示成编号列表,让用户选哪个。选好后把该候选的 `title ({year})` 作为新 hint 重跑(可加 `--yes` 跳过二次候选)。
 
@@ -108,6 +171,8 @@ panbox ingest <URL> --hint "<hint>" --yes --dry-run --json
 ```bash
 panbox ingest <URL> --hint "<同样的 hint>" --yes --json
 ```
+
+综艺严格模式同理保留 `--tmdb-id/--season/--type tv/--variety`,只去掉 `--dry-run`。
 
 ### 5. 报告结果
 

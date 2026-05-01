@@ -167,6 +167,14 @@ panbox ingest https://pan.quark.cn/s/xxx --hint "某某剧" --yes
 
 # 指定类型
 panbox ingest https://115cdn.com/s/xxx?password=yyyy --hint "某某电影" --type movie
+
+# 综艺严格模式:按 TMDB season 集数反向匹配网盘正片,排除加更/花絮/会员版等
+panbox ingest https://www.alipan.com/s/xxx \
+  --tmdb-id 98031 \
+  --season 14 \
+  --type tv \
+  --variety \
+  --dry-run
 ```
 
 **URL 格式与密码参数**：
@@ -177,6 +185,15 @@ panbox ingest https://115cdn.com/s/xxx?password=yyyy --hint "某某电影" --typ
 | 阿里云盘 | `alipan.com/s/XXX` 或 `aliyundrive.com/s/XXX` | 无密码 |
 | 115 | `115.com/s/XXX` 或 `115cdn.com/s/XXX` | `?password=XXXX` |
 | 百度网盘 | `pan.baidu.com/s/XXX` | `?pwd=XXXX` |
+
+### 综艺严格模式
+
+综艺分享经常混入正片、加更、会员版、花絮、彩蛋、纯享、直播、训练室、发布会等内容。`--variety` 会先读取指定 TMDB season 的 episode 列表，再按日期、期数/集数、上中下、标题关键词反向匹配网盘文件，只入库匹配到 TMDB 正集的文件。若文件日期与 TMDB 播出日期只差 1 天，则必须同时匹配期数/上下，避免上传日期偏移漏集。
+
+典型场景:
+
+- `奔跑吧`: TMDB season 号可能是 `S14`, season 名却叫“第10季”,网盘文件常写日期和“第几期”。请使用 `--tmdb-id 98031 --season 14 --type tv --variety`。
+- `乘风/浪姐`: 可能既在 `乘风破浪的姐姐` 下作为 S07，也可能有单独 `乘风2026` 条目作为 S01。以用户提供的 TMDB URL 为准,分别传对应的 `--tmdb-id` 和 `--season`。
 
 ### 其他命令
 

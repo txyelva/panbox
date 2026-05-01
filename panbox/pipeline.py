@@ -19,6 +19,7 @@ from .matcher import Guess, parse_hint
 from .scraper import artwork
 from .scraper import nfo as nfo_mod
 from .scraper.tmdb import TMDB, TMDBResult
+from .variety import build_variety_episodes, match_variety_files
 
 
 @dataclass
@@ -32,6 +33,7 @@ class IngestResult:
     added: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     candidates: list[dict] = field(default_factory=list)
+    planned: list[dict] = field(default_factory=list)
     message: Optional[str] = None
 
 
@@ -117,6 +119,9 @@ def ingest(
     passcode: Optional[str] = None,
     auto_yes: bool = False,
     dry_run: bool = False,
+    tmdb_id: Optional[int] = None,
+    season: Optional[int] = None,
+    variety: bool = False,
 ) -> IngestResult:
     # ---- 1. 按 URL 选云盘 + 解析分享链接 + 拿 stoken ----
     cloud_name, pwd_id, pw_from_url = cloud_parse_share_url(url)
@@ -133,59 +138,131 @@ def ingest(
     if not share_videos:
         return IngestResult(status="error", message="分享里没找到视频文件")
 
-    # ---- 3. 识别 query ----
-    pick = _pick_query(share_videos, hint, media_type)
-    query = pick.query
-    season_hint = pick.season
-    mt = pick.media_type
-    if not query:
-        return IngestResult(status="error", message="无法从文件名或 hint 推断标题")
-
-    # ---- 4. TMDB 搜索 ----
+    # ---- 3/4. TMDB 识别 ----
     tmdb = TMDB(cfg.tmdb.api_key, cfg.tmdb.language)
-    candidates = tmdb.search(query, year=pick.year, media_type=mt)[:5]
-    if not candidates:
+    season_hint = season
+    query = ""
+
+    if tmdb_id is not None:
+        mt = media_type or ("tv" if season is not None else None)
+        if mt == "movie":
+            details = tmdb.movie_details(tmdb_id)
+            chosen = TMDBResult(
+                id=tmdb_id,
+                media_type="movie",
+                title=details.get("title") or details.get("original_title") or "",
+                original_title=details.get("original_title") or "",
+                year=(details.get("release_date") or "").split("-")[0] or None,
+                overview=details.get("overview") or "",
+                popularity=float(details.get("popularity") or 0.0),
+                poster_path=details.get("poster_path"),
+            )
+        else:
+            details = tmdb.tv_details(tmdb_id)
+            chosen = TMDBResult(
+                id=tmdb_id,
+                media_type="tv",
+                title=details.get("name") or details.get("original_name") or "",
+                original_title=details.get("original_name") or "",
+                year=(details.get("first_air_date") or "").split("-")[0] or None,
+                overview=details.get("overview") or "",
+                popularity=float(details.get("popularity") or 0.0),
+                poster_path=details.get("poster_path"),
+            )
+        if chosen.media_type == "tv" and season_hint is None:
+            season_hint = 1
+    else:
+        pick = _pick_query(share_videos, hint, media_type)
+        query = pick.query
+        season_hint = season_hint or pick.season
+        mt = pick.media_type
+        if season_hint is not None and mt is None:
+            mt = "tv"
+        if not query:
+            return IngestResult(status="error", message="无法从文件名或 hint 推断标题")
+
+        candidates = tmdb.search(query, year=pick.year, media_type=mt)[:5]
+        if not candidates:
+            return IngestResult(
+                status="error",
+                message=f"TMDB 未找到:{query} (year={pick.year} type={mt})",
+            )
+
+        # 未指定年份时,同名候选按年份倒序(离现在最近的优先),非同名按热度保持原序
+        if pick.year is None:
+            query_lower = query.strip().lower()
+            def _sort_key(c: TMDBResult) -> tuple:
+                title_match = (
+                    c.title.lower() == query_lower
+                    or c.original_title.lower() == query_lower
+                )
+                year_int = int(c.year) if c.year and c.year.isdigit() else 0
+                return (not title_match, -year_int, -c.popularity)
+            candidates = sorted(candidates, key=_sort_key)
+
+        if (
+            not auto_yes
+            and len(candidates) > 1
+            and cfg.policy.ask_when_ambiguous
+        ):
+            return IngestResult(
+                status="need_confirm",
+                candidates=[
+                    {
+                        "tmdb_id": c.id,
+                        "type": c.media_type,
+                        "title": c.title,
+                        "year": c.year,
+                        "popularity": round(c.popularity, 1),
+                        "overview": c.overview[:100],
+                    }
+                    for c in candidates
+                ],
+            )
+
+        chosen = candidates[0]
+
+    if variety and (chosen.media_type != "tv" or season_hint is None):
         return IngestResult(
             status="error",
-            message=f"TMDB 未找到:{query} (year={pick.year} type={mt})",
+            type=chosen.media_type,
+            tmdb_id=chosen.id,
+            title=chosen.title,
+            year=chosen.year,
+            message="综艺严格模式需要 TV 条目和明确 season",
         )
 
-    # 未指定年份时,同名候选按年份倒序(离现在最近的优先),非同名按热度保持原序
-    if pick.year is None:
-        query_lower = query.strip().lower()
-        def _sort_key(c: TMDBResult) -> tuple:
-            title_match = (
-                c.title.lower() == query_lower
-                or c.original_title.lower() == query_lower
-            )
-            year_int = int(c.year) if c.year and c.year.isdigit() else 0
-            return (not title_match, -year_int, -c.popularity)
-        candidates = sorted(candidates, key=_sort_key)
-
-    if (
-        not auto_yes
-        and len(candidates) > 1
-        and cfg.policy.ask_when_ambiguous
-    ):
-        return IngestResult(
-            status="need_confirm",
-            candidates=[
-                {
-                    "tmdb_id": c.id,
-                    "type": c.media_type,
-                    "title": c.title,
-                    "year": c.year,
-                    "popularity": round(c.popularity, 1),
-                    "overview": c.overview[:100],
-                }
-                for c in candidates
-            ],
-        )
-
-    chosen: TMDBResult = candidates[0]
     layout = Layout(title=chosen.title, year=chosen.year, media_type=chosen.media_type)
+    variety_matches = []
+    if variety and chosen.media_type == "tv" and season_hint is not None:
+        season_details = tmdb.tv_season(chosen.id, season_hint)
+        episodes = build_variety_episodes(season_details)
+        variety_matches = match_variety_files(share_videos, episodes)
+        if not variety_matches:
+            return IngestResult(
+                status="error",
+                type="tv",
+                tmdb_id=chosen.id,
+                title=chosen.title,
+                year=chosen.year,
+                message=f"综艺严格匹配未找到可入库正片 season={season_hint}",
+                skipped=[f.name for f in share_videos[:50]],
+            )
 
     if dry_run:
+        planned = []
+        plan_rows = []
+        if variety_matches and season_hint is not None:
+            for m in variety_matches:
+                target = layout.tv_filename(season_hint, m.episode.number, m.file.ext)
+                planned.append(target)
+                plan_rows.append({
+                    "episode": m.episode.number,
+                    "source": m.file.name,
+                    "target": target,
+                    "score": m.score,
+                    "reasons": list(m.reasons),
+                })
         return IngestResult(
             status="ok",
             type=chosen.media_type,
@@ -197,7 +274,15 @@ def ingest(
                 if chosen.media_type == "movie"
                 else layout.tv_show_dir(cloud_cfg.library_tv)
             ),
-            message=f"dry_run — cloud={cloud_name} query='{query}' season={season_hint} 未执行转存",
+            added=planned,
+            planned=plan_rows,
+            skipped=[] if not variety_matches else [
+                f.name for f in share_videos if f.fid not in {m.file.fid for m in variety_matches}
+            ][:50],
+            message=(
+                f"dry_run — cloud={cloud_name} query='{query}' season={season_hint} "
+                f"variety={variety} matched={len(variety_matches)} 未执行转存"
+            ),
         )
 
     # ---- 5. 选定 staging,转存 ----
@@ -207,13 +292,18 @@ def ingest(
         staging_path = cloud_cfg.staging_tv
     staging_fid = qc.mkdir_p(staging_path)
 
-    # 转存 = 分享根的所有顶层条目
+    # 普通入库转存分享根;综艺严格模式只转存已匹配到 TMDB 正集的文件。
     top_items = qc.list_share(pwd_id, stoken, "0")
-    fid_list = [x.fid for x in top_items]
-    token_list = [x.fid_token or "" for x in top_items]
+    save_items = [m.file for m in variety_matches] if variety_matches else top_items
+    fid_list = [x.fid for x in save_items]
+    token_list = [x.fid_token or "" for x in save_items]
     # 源分享里所有视频数(递归),用于确认 copy 完成
     all_share = qc.list_share_recursive(pwd_id, stoken, "0")
-    expected_video_count = sum(1 for f in all_share if f.is_video)
+    expected_video_count = (
+        len(variety_matches)
+        if variety_matches
+        else sum(1 for f in all_share if f.is_video)
+    )
 
     # 115 等不返回新 fid 的云盘:先拍快照,copy 后扫新增
     staging_snapshot: set[str] = {f.fid for f in qc.list_dir(staging_fid)}
@@ -280,8 +370,9 @@ def ingest(
     else:
         result = _finalize_tv(
             qc, cfg, cloud_cfg, layout, staged_videos, season_hint,
-            tmdb=tmdb if cfg.policy.write_metadata else None,
+            tmdb=tmdb if (cfg.policy.write_metadata or variety) else None,
             tmdb_id=chosen.id,
+            variety=variety,
         )
     result.tmdb_id = chosen.id
 
@@ -533,6 +624,7 @@ def _finalize_tv(
     season_hint: Optional[int],
     tmdb: Optional[TMDB] = None,
     tmdb_id: Optional[int] = None,
+    variety: bool = False,
 ) -> IngestResult:
     # 多季分享(父目录明示了 >=2 个不同 season)里,裸集数不再默认到 S01
     has_multi_folder_season = len({fs for _, fs in staged if fs is not None}) > 1
@@ -540,7 +632,23 @@ def _finalize_tv(
     # 按 (season, episode) 解析每个 staged 视频
     parsed: list[tuple[int, Any, RemoteFile]] = []  # season, episode(int|list), file
     orphans: list[RemoteFile] = []
+    variety_by_fid: dict[str, int] = {}
+    if variety and tmdb is not None and tmdb_id is not None and season_hint is not None:
+        try:
+            season_details = tmdb.tv_season(tmdb_id, season_hint)
+            episodes = build_variety_episodes(season_details)
+            matches = match_variety_files([v for v, _ in staged], episodes)
+            variety_by_fid = {m.file.fid: m.episode.number for m in matches}
+        except Exception:
+            variety_by_fid = {}
+
     for v, folder_season in staged:
+        if variety:
+            if season_hint is None or v.fid not in variety_by_fid:
+                orphans.append(v)
+                continue
+            parsed.append((int(season_hint), variety_by_fid[v.fid], v))
+            continue
         g = Guess.from_text(v.name)
         # 优先级: 文件名 SxxExx > 父目录 season > hint > 单季默认 1
         s = g.season
@@ -622,7 +730,7 @@ def _finalize_tv(
             existing_names.add(new_name)
 
             # 每集 NFO + thumb
-            if tmdb is not None and tmdb_id is not None:
+            if cfg.policy.write_metadata and tmdb is not None and tmdb_id is not None:
                 try:
                     _write_episode_metadata(
                         qc, tmdb, tmdb_id, s, ep_ints,
