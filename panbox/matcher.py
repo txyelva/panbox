@@ -32,6 +32,11 @@ _SEASON_PATTERNS = [
     re.compile(r"[Ss](\d{1,2})(?!\d)"),  # 含 S01E01 里的 S01
 ]
 
+# 综艺中文期数映射:
+# 第1期上 -> E01, 第1期下 -> E02, 第2期上 -> E03 ...
+_CN_VARIETY_EP = re.compile(r"第\s*([0-9零〇一二两三四五六七八九十]+)\s*期\s*([上下])")
+_CN_VARIETY_EP_SIMPLE = re.compile(r"第\s*([0-9零〇一二两三四五六七八九十]+)\s*期")
+
 
 def normalize_query(text: str) -> tuple[str, Optional[int]]:
     """剥离中文/英文季度标记,返回 (纯标题, 季号)"""
@@ -93,15 +98,14 @@ def parse_hint(text: str) -> HintParse:
     if m:
         season = int(m.group(1))
         t = t[: m.start()] + " " + t[m.end() :]
-    else:
-        for pat in _SEASON_PATTERNS:
-            m = pat.search(t)
-            if m:
-                n = _cn_to_int(m.group(1))
-                if n is not None:
-                    season = n
-                t = pat.sub(" ", t)
-                break
+    for pat in _SEASON_PATTERNS:
+        m = pat.search(t)
+        if m:
+            n = _cn_to_int(m.group(1))
+            if season is None and n is not None:
+                season = n
+            t = pat.sub(" ", t)
+            break
 
     # 剩下的独立 E01-E19 / E05 也清掉
     t = _E_ONLY.sub(" ", t)
@@ -124,6 +128,24 @@ class Guess:
     @classmethod
     def from_text(cls, text: str) -> "Guess":
         info: dict[str, Any] = dict(guessit(text))
+
+        # guessit 对综艺命名如“第1期上/下”通常抽不到 episode，这里做中文规则兜底。
+        if info.get("episode") is None:
+            m = _CN_VARIETY_EP.search(text)
+            if m:
+                period = _cn_to_int(m.group(1))
+                half = m.group(2)
+                if period is not None:
+                    info["episode"] = period * 2 - 1 if half == "上" else period * 2
+                    info["type"] = "episode"
+            else:
+                m2 = _CN_VARIETY_EP_SIMPLE.search(text)
+                if m2:
+                    period = _cn_to_int(m2.group(1))
+                    if period is not None:
+                        info["episode"] = period
+                        info["type"] = "episode"
+
         gtype = info.get("type")
         if gtype == "episode":
             media_type = "tv"

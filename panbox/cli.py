@@ -110,7 +110,7 @@ def identify(
         "status": "ok",
         "query": query,
         "season": season_hint,
-        "guess": asdict(guess) if guess else None,
+        "guess": _asdict(guess) if guess else None,
         "candidates": [
             {
                 "tmdb_id": r.id,

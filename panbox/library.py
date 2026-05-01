@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from .clouds.base import RemoteFile
-from .matcher import Guess
+from .matcher import Guess, _cn_to_int
 
 _SAFE_CHARS = re.compile(r'[\\/:*?"<>|]')
 
@@ -15,13 +15,10 @@ _SXEX_RE = re.compile(r"[sS](\d{1,2})[\s._\-]*[eE](\d{1,3})")
 _NXN_RE = re.compile(r"(?<!\d)(\d{1,2})x(\d{1,3})(?!\d)")
 
 # 父目录 → season 推断
-_CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
-           "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 _SEASON_FOLDER_RES = [
     re.compile(r"[sS](\d{1,2})(?!\d)"),                     # S01 / s1
     re.compile(r"[Ss]eason[\s._\-]*(\d{1,2})"),             # Season 1 / Season_01
-    re.compile(r"第\s*(\d{1,2})\s*季"),                      # 第1季 / 第 01 季
-    re.compile(r"第\s*([一二三四五六七八九十])\s*季"),           # 第一季
+    re.compile(r"第\s*([0-9零〇一二两三四五六七八九十]+)\s*季"),  # 第1季 / 第十一季
 ]
 
 
@@ -47,12 +44,12 @@ def parse_season_from_name(name: str) -> Optional[int]:
         if not m:
             continue
         v = m.group(1)
-        if v in _CN_NUM:
-            return _CN_NUM[v]
         try:
             return int(v)
         except ValueError:
-            continue
+            n = _cn_to_int(v)
+            if n is not None:
+                return n
     return None
 
 
@@ -99,7 +96,11 @@ class Layout:
             tag = f"S{season:02d}E{int(episode[0]):02d}-E{int(episode[-1]):02d}"
         else:
             ep = episode[0] if isinstance(episode, list) else episode
-            tag = f"S{season:02d}E{int(ep):02d}"
+            if ep == 0:
+                # 特辑/花絮使用 Special 标记
+                tag = f"S{season:02d}Special"
+            else:
+                tag = f"S{season:02d}E{int(ep):02d}"
         return f"{title} - {tag}.{ext}"
 
 

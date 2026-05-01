@@ -51,6 +51,13 @@ class TMDB:
         if media_type == "tv":
             data = self._get("/search/tv", query=query, first_air_date_year=year)
             return [self._tv(x) for x in data.get("results", [])]
+        if year is not None:
+            movie_data = self._get("/search/movie", query=query, year=year)
+            tv_data = self._get("/search/tv", query=query, first_air_date_year=year)
+            out = [self._movie(x) for x in movie_data.get("results", [])]
+            out.extend(self._tv(x) for x in tv_data.get("results", []))
+            if out:
+                return sorted(out, key=lambda x: x.popularity, reverse=True)
         data = self._get("/search/multi", query=query)
         out: list[TMDBResult] = []
         for x in data.get("results", []):

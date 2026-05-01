@@ -457,8 +457,12 @@ def _ensure_staging_season_match(
             if parsed == season_hint:
                 continue  # 正确,无需处理
             # 季号错误:替换为正确季号
-            new_name = re.sub(r'第\s*\d+\s*季', f'第{season_hint}季', c.name)
-            new_name = re.sub(r'[Ss]eason\s*\d+', f'Season {season_hint}', new_name)
+            new_name = re.sub(
+                r'第\s*[0-9零〇一二两三四五六七八九十]+\s*季',
+                f'第{season_hint}季',
+                c.name,
+            )
+            new_name = re.sub(r'[Ss]eason[\s._\-]*\d+', f'Season {season_hint}', new_name)
             new_name = re.sub(r'\b[sS]\d{1,2}\b', f'S{season_hint:02d}', new_name)
             if new_name == c.name:  # 正则没匹配到,直接加后缀
                 new_name = f"{c.name} 第{season_hint}季"
@@ -634,5 +638,5 @@ def _finalize_tv(
         year=layout.year,
         path=last_target or layout.tv_show_dir(cloud_cfg.library_tv),
         added=added,
-        skipped=skipped + [o.name for o in orphans],
+        skipped=skipped,
     )
