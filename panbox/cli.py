@@ -29,24 +29,28 @@ clouds:
     staging_tv:     /影视剧/待刮削/待刮削电视剧
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
   ali:
     refresh_token: ""
     staging_movies: /待刮削/电影
     staging_tv:     /待刮削/剧集
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
   115:
     cookie: ""
     staging_movies: /待刮削/电影
     staging_tv:     /待刮削/剧集
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
   baidu:
     cookie: ""
     staging_movies: /待刮削/电影
     staging_tv:     /待刮削/剧集
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
 
 policy:
   on_movie_exists: skip          # skip | replace
@@ -288,6 +292,7 @@ def doctor() -> None:
             ("staging_tv    ", cloud_cfg.staging_tv),
             ("library_movies", cloud_cfg.library_movies),
             ("library_tv    ", cloud_cfg.library_tv),
+            ("library_variety", getattr(cloud_cfg, "library_variety", "")),
         ]:
             mark = "[green]✓[/green]" if val else "[yellow]![/yellow]"
             console.print(f"  {mark} {name}: {val or '(未设置)'}")

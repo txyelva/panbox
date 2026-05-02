@@ -99,6 +99,8 @@ panbox ingest "https://www.alipan.com/s/QZF6jNbfX55" \
 
 并主动排除常见衍生内容: `加更`、`会员`、`彩蛋`、`精华`、`花絮`、`预告`、`直播`、`发布会`、`跑男来了`、`训练室`、`全纪录`、`纯享`、`超前企划`、`火锅局`、`天真时间`、`姐姐请上车`、`红毯`、`倒计时`、`运动会` 等。
 
+综艺目录:TMDB TV details 里 `type=Reality` 或 genre `Reality/真人秀` 会被视为综艺;显式 `--variety` 也会视为综艺。综艺优先落入云盘配置的 `library_variety`,未配置时落到 `library_tv` 的同级 `Variety` 目录,例如 `/影视剧/TV` → `/影视剧/Variety`。
+
 ### 综艺特殊案例
 
 **奔跑吧**: TMDB 的 season 号和官方季名不一致时，以 TMDB season URL 为准。例如 `tv/98031/season/14` 的 season 号是 14，但 TMDB season 名可能是“奔跑吧 第10季”。网盘文件常只有日期和“第几期”，必须用 `--tmdb-id 98031 --season 14 --variety`。
@@ -228,24 +230,28 @@ clouds:
     staging_tv:     /影视剧/待刮削/待刮削电视剧
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
   ali:
     refresh_token: "..."    # alipan.com 登录后本地存储里拿
     staging_movies: /影视剧/待刮削/待刮削电影
     staging_tv:     /影视剧/待刮削/待刮削电视剧
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
   "115":                    # 注意引号,YAML 中纯数字 key 需加引号
     cookie: "UID=xxx; CID=xxx; SEID=xxx"   # F12 → Application → Cookies
     staging_movies: /影视剧/待刮削/待刮削电影
     staging_tv:     /影视剧/待刮削/待刮削电视剧
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
   baidu:
     cookie: "BDUSS=xxx; STOKEN=xxx; BAIDUID=xxx"   # 百度网盘网页登录后 F12 复制 Cookie
     staging_movies: /影视剧/待刮削/待刮削电影
     staging_tv:     /影视剧/待刮削/待刮削电视剧
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
 policy:
   on_movie_exists: skip        # skip | replace
   on_tv_incomplete: diff_only  # diff_only 只补新集

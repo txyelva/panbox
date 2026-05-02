@@ -95,6 +95,7 @@ clouds:
     staging_tv:     /影视剧/待刮削/待刮削电视剧
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
 ```
 
 ### 阿里云盘
@@ -109,6 +110,7 @@ clouds:
     staging_tv:     /待刮削/剧集
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
 ```
 
 ### 115网盘
@@ -123,6 +125,7 @@ clouds:
     staging_tv:     /待刮削/剧集
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
 ```
 
 ### 百度网盘
@@ -137,6 +140,7 @@ clouds:
     staging_tv:     /待刮削/剧集
     library_movies: /影视剧/Movies
     library_tv:     /影视剧/TV
+    library_variety: /影视剧/Variety
 ```
 
 ### 策略
@@ -189,6 +193,8 @@ panbox ingest https://www.alipan.com/s/xxx \
 ### 综艺严格模式
 
 综艺分享经常混入正片、加更、会员版、花絮、彩蛋、纯享、直播、训练室、发布会等内容。`--variety` 会先读取指定 TMDB season 的 episode 列表，再按日期、期数/集数、上中下、标题关键词反向匹配网盘文件，只入库匹配到 TMDB 正集的文件。若文件日期与 TMDB 播出日期只差 1 天，则必须同时匹配期数/上下，避免上传日期偏移漏集。
+
+综艺会落入独立库目录:优先使用云盘配置里的 `library_variety`,未配置时使用 `library_tv` 的同级 `Variety` 目录,例如 `/影视剧/TV` → `/影视剧/Variety`。TMDB 返回 `type=Reality` 或 genre `Reality/真人秀` 时,即使没有显式 `--variety`,也会使用综艺目录;显式 `--variety` 仍用于严格筛正片。
 
 典型场景:
 
@@ -255,6 +261,12 @@ panbox 生成的目录结构与 Plex / Emby / Jellyfin 兼容：
         ├── 凡人修仙传 - S01E01-thumb.jpg
         └── ...
 
+媒体库/Variety/
+└── 奔跑吧 (2014)/
+    └── Season 14/
+        ├── 奔跑吧 - S14E01.mp4
+        └── 奔跑吧 - S14E02.mp4
+
 媒体库/Movies/
 └── 流浪地球 (2019)/
     ├── 流浪地球 (2019).mkv
@@ -262,6 +274,8 @@ panbox 生成的目录结构与 Plex / Emby / Jellyfin 兼容：
     ├── poster.jpg
     └── fanart.jpg
 ```
+
+TMDB TV 条目的 `type=Reality` 或 genre `Reality/真人秀` 会被视为综艺；显式使用 `--variety` 时也会进入综艺库。若未配置 `library_variety`，默认落到 `library_tv` 的同级 `Variety` 目录。
 
 ---
 

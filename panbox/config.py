@@ -27,6 +27,7 @@ class QuarkConfig:
     staging_tv: str = ""
     library_movies: str = ""
     library_tv: str = ""
+    library_variety: str = ""
 
 
 @dataclass
@@ -36,6 +37,7 @@ class AliConfig:
     staging_tv: str = ""
     library_movies: str = ""
     library_tv: str = ""
+    library_variety: str = ""
 
 
 @dataclass
@@ -45,6 +47,7 @@ class Drive115Config:
     staging_tv: str = ""
     library_movies: str = ""
     library_tv: str = ""
+    library_variety: str = ""
 
 
 @dataclass
@@ -54,6 +57,7 @@ class BaiduConfig:
     staging_tv: str = ""
     library_movies: str = ""
     library_tv: str = ""
+    library_variety: str = ""
 
 
 @dataclass

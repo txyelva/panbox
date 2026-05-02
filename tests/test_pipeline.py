@@ -7,7 +7,12 @@ from typing import Iterable
 from panbox.clouds.base import RemoteFile
 from panbox.config import Config, TMDBConfig
 from panbox.library import Layout
-from panbox.pipeline import _ensure_staging_season_match, _finalize_tv
+from panbox.pipeline import (
+    _ensure_staging_season_match,
+    _finalize_tv,
+    _tmdb_says_variety,
+    _tv_library_root,
+)
 
 
 class RenameOnlyCloud:
@@ -83,6 +88,34 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(result.status, "ok")
         self.assertEqual(result.skipped, ["unparsed.video.mkv"])
         self.assertEqual(result.added, ["Show - S01E01.mkv"])
+
+    def test_finalize_tv_can_use_variety_library_root(self) -> None:
+        cfg = Config(tmdb=TMDBConfig(api_key="test"))
+        cloud_cfg = SimpleNamespace(library_tv="/TV", rejected_dir_tv="")
+        layout = Layout(title="奔跑吧", year="2014", media_type="tv")
+        cloud = FakeCloud()
+        staged = [(RemoteFile(fid="video1", name="奔跑吧.S14E01.mp4", is_dir=False), None)]
+
+        result = _finalize_tv(
+            cloud, cfg, cloud_cfg, layout, staged, season_hint=None,
+            library_tv_root="/Variety",
+        )
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.path, "/Variety/奔跑吧 (2014)/Season 14")
+        self.assertEqual(result.added, ["奔跑吧 - S14E01.mp4"])
+
+    def test_tmdb_variety_detection_uses_type_or_genre(self) -> None:
+        self.assertTrue(_tmdb_says_variety({"type": "Reality", "genres": []}))
+        self.assertTrue(_tmdb_says_variety({"genres": [{"id": 10764, "name": "真人秀"}]}))
+        self.assertFalse(_tmdb_says_variety({"type": "Scripted", "genres": [{"id": 18, "name": "剧情"}]}))
+
+    def test_tv_library_root_defaults_variety_to_sibling_folder(self) -> None:
+        cloud_cfg = SimpleNamespace(library_tv="/TV", library_variety="")
+        self.assertEqual(_tv_library_root(cloud_cfg, is_variety=False), "/TV")
+        self.assertEqual(_tv_library_root(cloud_cfg, is_variety=True), "/Variety")
+        cloud_cfg.library_variety = "/Variety"
+        self.assertEqual(_tv_library_root(cloud_cfg, is_variety=True), "/Variety")
 
 
 if __name__ == "__main__":

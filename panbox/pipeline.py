@@ -21,6 +21,10 @@ from .scraper import nfo as nfo_mod
 from .scraper.tmdb import TMDB, TMDBResult
 from .variety import build_variety_episodes, match_variety_files
 
+_TMDB_VARIETY_GENRE_IDS = {10764}
+_TMDB_VARIETY_TYPES = {"reality"}
+_TMDB_VARIETY_GENRE_NAMES = {"reality", "真人秀", "综艺"}
+
 
 @dataclass
 class IngestResult:
@@ -43,6 +47,31 @@ class QueryPick:
     year: Optional[int]
     season: Optional[int]
     media_type: Optional[str]
+
+
+def _tmdb_says_variety(details: dict[str, Any]) -> bool:
+    tv_type = str(details.get("type") or "").strip().lower()
+    if tv_type in _TMDB_VARIETY_TYPES:
+        return True
+    for genre in details.get("genres") or []:
+        gid = genre.get("id")
+        name = str(genre.get("name") or "").strip().lower()
+        if gid in _TMDB_VARIETY_GENRE_IDS or name in _TMDB_VARIETY_GENRE_NAMES:
+            return True
+    return False
+
+
+def _tv_library_root(cloud_cfg: Any, *, is_variety: bool) -> str:
+    if not is_variety:
+        return cloud_cfg.library_tv
+    configured = str(getattr(cloud_cfg, "library_variety", "") or "").strip()
+    if configured:
+        return configured
+    tv_root = cloud_cfg.library_tv.rstrip("/")
+    parent, _, _ = tv_root.rpartition("/")
+    if parent:
+        return f"{parent}/Variety"
+    return "/Variety" if tv_root.startswith("/") else "Variety"
 
 
 def _pick_query(
@@ -142,11 +171,13 @@ def ingest(
     tmdb = TMDB(cfg.tmdb.api_key, cfg.tmdb.language)
     season_hint = season
     query = ""
+    chosen_details: Optional[dict[str, Any]] = None
 
     if tmdb_id is not None:
         mt = media_type or ("tv" if season is not None else None)
         if mt == "movie":
             details = tmdb.movie_details(tmdb_id)
+            chosen_details = details
             chosen = TMDBResult(
                 id=tmdb_id,
                 media_type="movie",
@@ -159,6 +190,7 @@ def ingest(
             )
         else:
             details = tmdb.tv_details(tmdb_id)
+            chosen_details = details
             chosen = TMDBResult(
                 id=tmdb_id,
                 media_type="tv",
@@ -232,6 +264,18 @@ def ingest(
             message="综艺严格模式需要 TV 条目和明确 season",
         )
 
+    if chosen.media_type == "tv" and chosen_details is None:
+        chosen_details = tmdb.tv_details(chosen.id)
+    is_variety_show = (
+        chosen.media_type == "tv"
+        and (variety or _tmdb_says_variety(chosen_details or {}))
+    )
+    tv_library_root = (
+        _tv_library_root(cloud_cfg, is_variety=is_variety_show)
+        if chosen.media_type == "tv"
+        else cloud_cfg.library_tv
+    )
+
     layout = Layout(title=chosen.title, year=chosen.year, media_type=chosen.media_type)
     variety_matches = []
     if variety and chosen.media_type == "tv" and season_hint is not None:
@@ -272,7 +316,7 @@ def ingest(
             path=(
                 layout.movie_dir(cloud_cfg.library_movies)
                 if chosen.media_type == "movie"
-                else layout.tv_show_dir(cloud_cfg.library_tv)
+                else layout.tv_show_dir(tv_library_root)
             ),
             added=planned,
             planned=plan_rows,
@@ -373,13 +417,17 @@ def ingest(
             tmdb=tmdb if (cfg.policy.write_metadata or variety) else None,
             tmdb_id=chosen.id,
             variety=variety,
+            library_tv_root=tv_library_root,
         )
     result.tmdb_id = chosen.id
 
     # ---- 8. 刮削剧/片级元数据(tvshow.nfo / movie.nfo + poster + fanart) ----
     if cfg.policy.write_metadata and result.status == "ok":
         try:
-            _write_show_metadata(qc, tmdb, cloud_cfg, layout, chosen)
+            _write_show_metadata(
+                qc, tmdb, cloud_cfg, layout, chosen,
+                library_tv_root=tv_library_root if chosen.media_type == "tv" else None,
+            )
         except Exception as e:
             # 元数据写入失败不影响主流程
             if result.message:
@@ -398,6 +446,7 @@ def _write_show_metadata(
     cloud_cfg: Any,
     layout: Layout,
     chosen: TMDBResult,
+    library_tv_root: Optional[str] = None,
 ) -> None:
     """拉 TMDB 详情 → 生成 tvshow.nfo / movie.nfo → 下载 poster/fanart → 上传到媒体库根目录。"""
     if chosen.media_type == "movie":
@@ -407,7 +456,7 @@ def _write_show_metadata(
         nfo_text = nfo_mod.movie_nfo(details)
     else:
         details = tmdb.tv_details(chosen.id)
-        target_dir = layout.tv_show_dir(cloud_cfg.library_tv)
+        target_dir = layout.tv_show_dir(library_tv_root or cloud_cfg.library_tv)
         nfo_name = "tvshow.nfo"
         nfo_text = nfo_mod.tvshow_nfo(details)
 
@@ -625,6 +674,7 @@ def _finalize_tv(
     tmdb: Optional[TMDB] = None,
     tmdb_id: Optional[int] = None,
     variety: bool = False,
+    library_tv_root: Optional[str] = None,
 ) -> IngestResult:
     # 多季分享(父目录明示了 >=2 个不同 season)里,裸集数不再默认到 S01
     has_multi_folder_season = len({fs for _, fs in staged if fs is not None}) > 1
@@ -684,7 +734,8 @@ def _finalize_tv(
     last_target: str = ""
 
     # 剧目录:先解析/创建一次,后面复用里面的季子目录
-    show_dir = layout.tv_show_dir(cloud_cfg.library_tv)
+    tv_root = library_tv_root or cloud_cfg.library_tv
+    show_dir = layout.tv_show_dir(tv_root)
     show_fid = qc.mkdir_p(show_dir)
     show_children = qc.list_dir(show_fid)
 
@@ -695,7 +746,7 @@ def _finalize_tv(
             season_fid = existing_season.fid
             season_dir = f"{show_dir}/{existing_season.name}"
         else:
-            season_dir = layout.season_dir(cloud_cfg.library_tv, s)
+            season_dir = layout.season_dir(tv_root, s)
             season_fid = qc.mkdir_p(season_dir)
             # 刷新 show_children,后续 season 也能看到本轮新建的目录
             show_children = qc.list_dir(show_fid)
@@ -744,7 +795,7 @@ def _finalize_tv(
         type="tv",
         title=layout.title,
         year=layout.year,
-        path=last_target or layout.tv_show_dir(cloud_cfg.library_tv),
+        path=last_target or layout.tv_show_dir(tv_root),
         added=added,
         skipped=skipped,
     )
