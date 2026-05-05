@@ -12,9 +12,28 @@ from .clouds import parse_share_url as cloud_parse_share_url
 from .config import Config, DEFAULT_CONFIG_PATH
 from .matcher import Guess, normalize_query
 from .pipeline import ingest as _ingest
+from .pipeline import ingest_folder as _ingest_folder
 from .scraper.tmdb import TMDB
 
 console = Console()
+
+
+def _load_rename_plan(path: str | None):
+    if not path:
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _ensure_cloud_enabled(cfg: Config, cloud_name: str) -> None:
+    if cloud_name == "quark" and not cfg.quark.cookie:
+        raise click.UsageError("夸克 cookie 未设置,编辑 " + str(DEFAULT_CONFIG_PATH))
+    if cloud_name == "ali" and not cfg.ali.refresh_token:
+        raise click.UsageError("阿里云盘 refresh_token 未设置,编辑 " + str(DEFAULT_CONFIG_PATH))
+    if cloud_name == "115" and not cfg.drive115.cookie:
+        raise click.UsageError("115 cookie 未设置,编辑 " + str(DEFAULT_CONFIG_PATH))
+    if cloud_name == "baidu" and not cfg.baidu.cookie:
+        raise click.UsageError("百度网盘 cookie 未设置,编辑 " + str(DEFAULT_CONFIG_PATH))
 
 EXAMPLE_CONFIG = """\
 tmdb:
@@ -170,6 +189,7 @@ def identify(
 @click.option("--tmdb-id", type=int, help="跳过搜索,直接使用指定 TMDB ID")
 @click.option("--season", type=int, help="指定 TV season 号(常与 --tmdb-id/--variety 搭配)")
 @click.option("--variety", is_flag=True, help="综艺严格模式:按 TMDB 集数反向匹配正片,排除加更/花絮等")
+@click.option("--rename-plan", type=click.Path(exists=True, dir_okay=False), help="转存后先按 JSON 计划批量重命名,再刮削")
 @click.option("--yes", "auto_yes", is_flag=True, help="自动选择热度最高的 TMDB 结果")
 @click.option("--dry-run", is_flag=True, help="只识别+输出目标路径,不转存")
 @click.option("--json", "as_json", is_flag=True)
@@ -181,6 +201,7 @@ def ingest(
     tmdb_id: int | None,
     season: int | None,
     variety: bool,
+    rename_plan: str | None,
     auto_yes: bool,
     dry_run: bool,
     as_json: bool,
@@ -191,14 +212,7 @@ def ingest(
         cloud_name, _, _ = cloud_parse_share_url(url)
     except Exception as e:
         raise click.UsageError(str(e))
-    if cloud_name == "quark" and not cfg.quark.cookie:
-        raise click.UsageError("夸克 cookie 未设置,编辑 " + str(DEFAULT_CONFIG_PATH))
-    if cloud_name == "ali" and not cfg.ali.refresh_token:
-        raise click.UsageError("阿里云盘 refresh_token 未设置,编辑 " + str(DEFAULT_CONFIG_PATH))
-    if cloud_name == "115" and not cfg.drive115.cookie:
-        raise click.UsageError("115 cookie 未设置,编辑 " + str(DEFAULT_CONFIG_PATH))
-    if cloud_name == "baidu" and not cfg.baidu.cookie:
-        raise click.UsageError("百度网盘 cookie 未设置,编辑 " + str(DEFAULT_CONFIG_PATH))
+    _ensure_cloud_enabled(cfg, cloud_name)
     try:
         result = _ingest(
             cfg,
@@ -211,6 +225,7 @@ def ingest(
             tmdb_id=tmdb_id,
             season=season,
             variety=variety,
+            rename_plan=_load_rename_plan(rename_plan),
         )
     except Exception as e:
         if as_json:
@@ -237,6 +252,13 @@ def ingest(
         console.print(f"目标: {result.path}")
     if result.added:
         console.print(f"[green]入库 {len(result.added)}[/green]: " + ", ".join(result.added))
+    if result.renamed:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Source")
+        table.add_column("Target")
+        for row in result.renamed:
+            table.add_row(str(row.get("source", "")), str(row.get("target", "")))
+        console.print(table)
     if result.planned:
         table = Table(show_header=True, header_style="bold")
         table.add_column("EP")
@@ -259,6 +281,96 @@ def ingest(
             console.print(f"  {i}. {c['title']} ({c.get('year','-')}) [{c['type']}] "
                           f"tmdb={c['tmdb_id']} 热度={c['popularity']}")
         console.print("  → 重跑时加 --yes 选第一个,或 --hint 缩小范围")
+    if result.message:
+        console.print(f"[dim]{result.message}[/dim]")
+
+
+@main.command("ingest-folder")
+@click.argument("folder")
+@click.option("--cloud", "cloud_name", required=True, type=click.Choice(["quark", "ali", "115", "baidu"]), help="网盘名称")
+@click.option("--hint", help="剧名或电影名提示")
+@click.option("--type", "media_type", type=click.Choice(["movie", "tv"]))
+@click.option("--tmdb-id", type=int, help="跳过搜索,直接使用指定 TMDB ID")
+@click.option("--season", type=int, help="指定 TV season 号")
+@click.option("--variety", is_flag=True, help="综艺严格模式")
+@click.option("--rename-plan", type=click.Path(exists=True, dir_okay=False), help="先按 JSON 计划批量重命名,再刮削")
+@click.option("--yes", "auto_yes", is_flag=True, help="自动选择热度最高的 TMDB 结果")
+@click.option("--dry-run", is_flag=True, help="只识别+输出目标路径,不移动文件")
+@click.option("--json", "as_json", is_flag=True)
+def ingest_folder(
+    folder: str,
+    cloud_name: str,
+    hint: str | None,
+    media_type: str | None,
+    tmdb_id: int | None,
+    season: int | None,
+    variety: bool,
+    rename_plan: str | None,
+    auto_yes: bool,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
+    """刮削并入库网盘内已经转存好的某个文件夹。"""
+    cfg = Config.load()
+    _ensure_cloud_enabled(cfg, cloud_name)
+    try:
+        result = _ingest_folder(
+            cfg,
+            cloud_name,
+            folder,
+            hint=hint,
+            media_type=media_type,
+            auto_yes=auto_yes,
+            dry_run=dry_run,
+            tmdb_id=tmdb_id,
+            season=season,
+            variety=variety,
+            rename_plan=_load_rename_plan(rename_plan),
+        )
+    except Exception as e:
+        if as_json:
+            click.echo(json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False))
+        else:
+            console.print(f"[red]失败:[/red] {e}")
+        sys.exit(1)
+
+    payload = _asdict(result)
+    if as_json:
+        click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    console.print(f"[bold]{result.status}[/bold] {result.type or ''} {result.title or ''} ({result.year or '-'})")
+    if result.path:
+        console.print(f"目标: {result.path}")
+    if result.renamed:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Source")
+        table.add_column("Target")
+        for row in result.renamed:
+            table.add_row(str(row.get("source", "")), str(row.get("target", "")))
+        console.print(table)
+    if result.added:
+        console.print(f"[green]入库 {len(result.added)}[/green]: " + ", ".join(result.added))
+    if result.planned:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("EP")
+        table.add_column("Source")
+        table.add_column("Target")
+        table.add_column("Score")
+        for row in result.planned:
+            table.add_row(
+                str(row.get("episode", "")),
+                str(row.get("source", "")),
+                str(row.get("target", "")),
+                str(row.get("score", "")),
+            )
+        console.print(table)
+    if result.skipped:
+        console.print(f"[yellow]跳过 {len(result.skipped)}[/yellow]: " + ", ".join(result.skipped))
+    if result.candidates:
+        console.print("[yellow]需要确认,候选:[/yellow]")
+        for i, c in enumerate(result.candidates, 1):
+            console.print(f"  {i}. {c['title']} ({c.get('year','-')}) [{c['type']}] tmdb={c['tmdb_id']}")
     if result.message:
         console.print(f"[dim]{result.message}[/dim]")
 

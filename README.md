@@ -179,6 +179,25 @@ panbox ingest https://www.alipan.com/s/xxx \
   --type tv \
   --variety \
   --dry-run
+
+# 转存后先按重命名计划改名,再刮削入库
+panbox ingest https://pan.quark.cn/s/xxx \
+  --tmdb-id 12345 \
+  --season 1 \
+  --type tv \
+  --rename-plan rename-plan.json \
+  --dry-run \
+  --json
+
+# 刮削已经转存到自己网盘里的某个文件夹
+panbox ingest-folder "/待刮削/剧集/某节目" \
+  --cloud quark \
+  --tmdb-id 12345 \
+  --season 1 \
+  --type tv \
+  --rename-plan rename-plan.json \
+  --dry-run \
+  --json
 ```
 
 **URL 格式与密码参数**：
@@ -189,6 +208,30 @@ panbox ingest https://www.alipan.com/s/xxx \
 | 阿里云盘 | `alipan.com/s/XXX` 或 `aliyundrive.com/s/XXX` | 无密码 |
 | 115 | `115.com/s/XXX` 或 `115cdn.com/s/XXX` | `?password=XXXX` |
 | 百度网盘 | `pan.baidu.com/s/XXX` | `?pwd=XXXX` |
+
+### 批量重命名计划
+
+遇到文件名只有日期、日期缺年份、期名不规范等情况，可以先让 agent 根据用户要求生成 JSON 重命名计划。`--rename-plan` 会在正式刮削前把文件改成 panbox 能识别的标准名；`--dry-run` 时只模拟改名并在 JSON 的 `renamed` 字段里展示。
+
+支持两种格式:
+
+```json
+{
+  "0505.mp4": "Show - S01E03.mp4",
+  "第3期下.mp4": "Show - S01E04.mp4"
+}
+```
+
+或:
+
+```json
+[
+  {"source": "0505.mp4", "target": "Show - S01E03.mp4"},
+  {"source": "第3期下.mp4", "target": "Show - S01E04.mp4"}
+]
+```
+
+如果同一文件夹里有重名文件,计划项可以用 `fid` 精确指定。`target` 只能是文件名,不能带路径。
 
 ### 综艺严格模式
 

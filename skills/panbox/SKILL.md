@@ -36,7 +36,20 @@ panbox ingest <URL> \
     [--tmdb-id 12345] \
     [--season 14] \
     [--variety] \
+    [--rename-plan rename-plan.json] \
     [--passcode XXXX] \
+    [--yes] \
+    [--dry-run] \
+    --json
+
+panbox ingest-folder <网盘内目录路径> \
+    --cloud quark|ali|115|baidu \
+    [--hint "准确剧名"] \
+    [--type movie|tv] \
+    [--tmdb-id 12345] \
+    [--season 14] \
+    [--variety] \
+    [--rename-plan rename-plan.json] \
     [--yes] \
     [--dry-run] \
     --json
@@ -57,7 +70,44 @@ panbox ingest <URL> \
 | `skipped` | 被跳过(库里已有或解析失败)的文件 |
 | `candidates` | `status=need_confirm` 时的候选 TMDB 结果,含 `tmdb_id/title/year/type/overview` |
 | `planned` | dry-run 计划映射,综艺严格模式下含 `episode/source/target/score/reasons` |
+| `renamed` | dry-run 或执行时的批量重命名映射,含 `source/target/fid` |
 | `message` | 补充说明或错误信息 |
+
+## 批量重命名与已转存目录
+
+当文件名太乱、日期缺年份、只有日期/期名导致 panbox 识别不了时,不要再用旧包装脚本,也不要调用内部私有函数。使用正式参数:
+
+- 分享链接流程:`panbox ingest ... --rename-plan rename-plan.json --dry-run --json`
+- 已经转存到自己网盘里的目录:`panbox ingest-folder "<目录路径>" --cloud <云盘> ... --dry-run --json`
+
+`rename-plan.json` 支持对象映射:
+
+```json
+{
+  "0505.mp4": "Show - S01E03.mp4",
+  "第3期下.mp4": "Show - S01E04.mp4"
+}
+```
+
+也支持数组:
+
+```json
+[
+  {"source": "0505.mp4", "target": "Show - S01E03.mp4"},
+  {"source": "第3期下.mp4", "target": "Show - S01E04.mp4"}
+]
+```
+
+如果同目录有重名文件,计划项可加 `fid` 精确命中。`target` 只能是文件名,不能带路径。
+
+工作流:
+
+1. 先列出用户要改名的源文件名和目标名,让用户确认。
+2. 写 `rename-plan.json`。
+3. 先 dry-run,检查 JSON 里的 `renamed` 和 `added/planned`。
+4. 用户确认后,同一命令去掉 `--dry-run`。
+
+绝对不要使用 `~/.openclaw/workspace/scripts/panbox_ingest_with_rename.py`;它是旧方案,会绕过 `--variety`、`library_variety` 和 TMDB Reality 分类逻辑。
 
 ## 综艺严格模式
 
@@ -148,6 +198,12 @@ panbox ingest <URL> --hint "<hint>" --yes --dry-run --json
 panbox ingest <URL> --tmdb-id <id> --season <season> --type tv --variety --dry-run --json
 ```
 
+如果用户要处理已转存目录:
+
+```bash
+panbox ingest-folder "<目录路径>" --cloud <quark|ali|115|baidu> --hint "<hint>" --dry-run --json
+```
+
 ### 3. 根据结果分支
 
 **`status: ok`**:给用户展示识别结果,问一句确认:
@@ -158,6 +214,8 @@ panbox ingest <URL> --tmdb-id <id> --season <season> --type tv --variety --dry-r
 ```
 
 如果返回 `planned`,必须展示 source → target 的映射,方便用户确认综艺正片是否选对。
+
+如果返回 `renamed`,必须展示 rename source → target 的映射,让用户确认改名是否符合预期。
 
 **`status: need_confirm`**:把 `candidates` 展示成编号列表,让用户选哪个。选好后把该候选的 `title ({year})` 作为新 hint 重跑(可加 `--yes` 跳过二次候选)。
 
@@ -175,6 +233,8 @@ panbox ingest <URL> --hint "<同样的 hint>" --yes --json
 ```
 
 综艺严格模式同理保留 `--tmdb-id/--season/--type tv/--variety`,只去掉 `--dry-run`。
+
+`ingest-folder` 同理,用户确认后只去掉 `--dry-run`;不要换回 `ingest`。
 
 ### 5. 报告结果
 

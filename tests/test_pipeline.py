@@ -10,8 +10,11 @@ from panbox.library import Layout
 from panbox.pipeline import (
     _ensure_staging_season_match,
     _finalize_tv,
+    _apply_rename_rules,
+    _plan_tv_targets,
     _tmdb_says_variety,
     _tv_library_root,
+    normalize_rename_plan,
 )
 
 
@@ -116,6 +119,33 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(_tv_library_root(cloud_cfg, is_variety=True), "/Variety")
         cloud_cfg.library_variety = "/Variety"
         self.assertEqual(_tv_library_root(cloud_cfg, is_variety=True), "/Variety")
+
+    def test_rename_plan_updates_virtual_staged_names(self) -> None:
+        staged = [
+            (RemoteFile(fid="v1", name="20260505.mp4", is_dir=False), None),
+        ]
+        rules = normalize_rename_plan({
+            "20260505.mp4": "Show - S01E03.mp4",
+        })
+
+        renamed_staged, rows = _apply_rename_rules(
+            None, staged, rules, dry_run=True
+        )
+
+        self.assertEqual(renamed_staged[0][0].name, "Show - S01E03.mp4")
+        self.assertEqual(rows[0]["source"], "20260505.mp4")
+        self.assertEqual(rows[0]["target"], "Show - S01E03.mp4")
+
+    def test_plan_tv_targets_uses_renamed_names(self) -> None:
+        layout = Layout(title="Show", year="2026", media_type="tv")
+        staged = [
+            (RemoteFile(fid="v1", name="Show - S01E03.mp4", is_dir=False), None),
+        ]
+
+        added, skipped = _plan_tv_targets(layout, staged, season_hint=None)
+
+        self.assertEqual(added, ["Show - S01E03.mp4"])
+        self.assertEqual(skipped, [])
 
 
 if __name__ == "__main__":

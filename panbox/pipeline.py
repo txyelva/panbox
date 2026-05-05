@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from .clouds import from_url as cloud_from_url
+from .clouds import by_name as cloud_by_name
 from .clouds import parse_share_url as cloud_parse_share_url
 from .clouds.base import Cloud, RemoteFile
 from .config import Config
@@ -38,6 +39,7 @@ class IngestResult:
     skipped: list[str] = field(default_factory=list)
     candidates: list[dict] = field(default_factory=list)
     planned: list[dict] = field(default_factory=list)
+    renamed: list[dict] = field(default_factory=list)
     message: Optional[str] = None
 
 
@@ -47,6 +49,13 @@ class QueryPick:
     year: Optional[int]
     season: Optional[int]
     media_type: Optional[str]
+
+
+@dataclass(frozen=True)
+class RenameRule:
+    source: Optional[str]
+    target: str
+    fid: Optional[str] = None
 
 
 def _tmdb_says_variety(details: dict[str, Any]) -> bool:
@@ -72,6 +81,157 @@ def _tv_library_root(cloud_cfg: Any, *, is_variety: bool) -> str:
     if parent:
         return f"{parent}/Variety"
     return "/Variety" if tv_root.startswith("/") else "Variety"
+
+
+def _cloud_config(cfg: Config, cloud_name: str) -> Any:
+    attr = {"115": "drive115"}.get(cloud_name, cloud_name)
+    if not hasattr(cfg, attr):
+        raise ValueError(f"未知云盘:{cloud_name}")
+    return getattr(cfg, attr)
+
+
+def normalize_rename_plan(plan: Any) -> list[RenameRule]:
+    if not plan:
+        return []
+    if isinstance(plan, dict):
+        raw_items = [
+            {"source": str(source), "target": str(target)}
+            for source, target in plan.items()
+        ]
+    elif isinstance(plan, list):
+        raw_items = plan
+    else:
+        raise ValueError("rename plan 必须是对象映射或数组")
+
+    rules: list[RenameRule] = []
+    seen: set[tuple[Optional[str], Optional[str]]] = set()
+    targets: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            raise ValueError("rename plan 数组项必须是对象")
+        source = item.get("source") or item.get("from") or item.get("name")
+        fid = item.get("fid")
+        target = item.get("target") or item.get("to") or item.get("new_name")
+        source = str(source).strip() if source is not None else None
+        fid = str(fid).strip() if fid is not None else None
+        target = str(target).strip() if target is not None else ""
+        if not source and not fid:
+            raise ValueError("rename plan 每项必须提供 source 或 fid")
+        if not target:
+            raise ValueError("rename plan 每项必须提供 target")
+        if "/" in target or "\\" in target:
+            raise ValueError(f"rename target 只能是文件名,不能含路径:{target}")
+        key = (source, fid)
+        if key in seen:
+            raise ValueError(f"rename plan source/fid 重复:{source or fid}")
+        if target in targets:
+            raise ValueError(f"rename plan target 重复:{target}")
+        seen.add(key)
+        targets.add(target)
+        rules.append(RenameRule(source=source, fid=fid, target=target))
+    return rules
+
+
+def _apply_rename_rules(
+    qc: Optional[Cloud],
+    staged: list[tuple[RemoteFile, Optional[int]]],
+    rules: list[RenameRule],
+    *,
+    dry_run: bool,
+) -> tuple[list[tuple[RemoteFile, Optional[int]]], list[dict]]:
+    if not rules:
+        return staged, []
+
+    by_name: dict[str, list[int]] = {}
+    by_fid: dict[str, int] = {}
+    for idx, (file, _) in enumerate(staged):
+        by_name.setdefault(file.name, []).append(idx)
+        by_fid[file.fid] = idx
+
+    out = list(staged)
+    rows: list[dict] = []
+    used: set[int] = set()
+    for rule in rules:
+        if rule.fid:
+            idx = by_fid.get(rule.fid)
+            if idx is None:
+                raise ValueError(f"rename plan 未找到 fid:{rule.fid}")
+        else:
+            matches = by_name.get(rule.source or "", [])
+            if not matches:
+                raise ValueError(f"rename plan 未找到源文件:{rule.source}")
+            if len(matches) > 1:
+                raise ValueError(f"rename plan 源文件名不唯一,请使用 fid:{rule.source}")
+            idx = matches[0]
+        if idx in used:
+            raise ValueError(f"rename plan 重复命中同一文件:{rule.source or rule.fid}")
+        used.add(idx)
+        file, folder_season = out[idx]
+        old_name = file.name
+        if not dry_run and old_name != rule.target:
+            if qc is None:
+                raise ValueError("实际重命名需要 cloud client")
+            qc.rename(file.fid, rule.target)
+        out[idx] = (replace(file, name=rule.target), folder_season)
+        rows.append({
+            "fid": file.fid,
+            "source": old_name,
+            "target": rule.target,
+            "dry_run": dry_run,
+        })
+    return out, rows
+
+
+def _collect_videos_from_drive_folder(
+    qc: Cloud,
+    folder_fid: str,
+    folder_path: str,
+) -> list[tuple[RemoteFile, Optional[int]]]:
+    out: list[tuple[RemoteFile, Optional[int]]] = []
+    root_season = parse_season_from_name(folder_path.rstrip("/").rsplit("/", 1)[-1])
+
+    def walk(fid: str, inherited: Optional[int]) -> None:
+        for f in qc.list_dir(fid):
+            if f.is_dir:
+                sub = parse_season_from_name(f.name)
+                walk(f.fid, sub if sub is not None else inherited)
+            elif f.is_video:
+                out.append((f, inherited))
+
+    walk(folder_fid, root_season)
+    return out
+
+
+def _plan_tv_targets(
+    layout: Layout,
+    staged: list[tuple[RemoteFile, Optional[int]]],
+    season_hint: Optional[int],
+) -> tuple[list[str], list[str]]:
+    has_multi_folder_season = len({fs for _, fs in staged if fs is not None}) > 1
+    added: list[str] = []
+    skipped: list[str] = []
+    for v, folder_season in staged:
+        g = Guess.from_text(v.name)
+        season_num = g.season if g.season is not None else folder_season
+        if season_num is None:
+            season_num = season_hint
+        episode = g.episode
+        if episode is None:
+            skipped.append(v.name)
+            continue
+        if season_num is None:
+            if has_multi_folder_season:
+                skipped.append(v.name)
+                continue
+            season_num = 1
+        ep_list = episode if isinstance(episode, list) else [episode]
+        try:
+            ep_ints = [int(e) for e in ep_list]
+        except (TypeError, ValueError):
+            skipped.append(v.name)
+            continue
+        added.append(layout.tv_filename(int(season_num), ep_ints, v.ext))
+    return added, skipped
 
 
 def _pick_query(
@@ -151,6 +311,7 @@ def ingest(
     tmdb_id: Optional[int] = None,
     season: Optional[int] = None,
     variety: bool = False,
+    rename_plan: Any = None,
 ) -> IngestResult:
     # ---- 1. 按 URL 选云盘 + 解析分享链接 + 拿 stoken ----
     cloud_name, pwd_id, pw_from_url = cloud_parse_share_url(url)
@@ -166,6 +327,16 @@ def ingest(
     share_videos = [f for f in share_all if f.is_video]
     if not share_videos:
         return IngestResult(status="error", message="分享里没找到视频文件")
+    rename_rules = normalize_rename_plan(rename_plan)
+    renamed_rows: list[dict] = []
+    if rename_rules:
+        virtual_staged, renamed_rows = _apply_rename_rules(
+            None,
+            [(f, None) for f in share_videos],
+            rename_rules,
+            dry_run=True,
+        )
+        share_videos = [f for f, _ in virtual_staged]
 
     # ---- 3/4. TMDB 识别 ----
     tmdb = TMDB(cfg.tmdb.api_key, cfg.tmdb.language)
@@ -291,11 +462,13 @@ def ingest(
                 year=chosen.year,
                 message=f"综艺严格匹配未找到可入库正片 season={season_hint}",
                 skipped=[f.name for f in share_videos[:50]],
+                renamed=renamed_rows,
             )
 
     if dry_run:
         planned = []
         plan_rows = []
+        skipped_names: list[str] = []
         if variety_matches and season_hint is not None:
             for m in variety_matches:
                 target = layout.tv_filename(season_hint, m.episode.number, m.file.ext)
@@ -307,6 +480,18 @@ def ingest(
                     "score": m.score,
                     "reasons": list(m.reasons),
                 })
+            skipped_names = [
+                f.name for f in share_videos if f.fid not in {m.file.fid for m in variety_matches}
+            ][:50]
+        elif rename_rules and chosen.media_type == "tv":
+            planned, skipped_names = _plan_tv_targets(
+                layout, [(f, None) for f in share_videos], season_hint
+            )
+        elif rename_rules and chosen.media_type == "movie":
+            planned = [
+                layout.movie_filename(f.ext, part=(i + 1) if len(share_videos) > 1 else None)
+                for i, f in enumerate(share_videos)
+            ]
         return IngestResult(
             status="ok",
             type=chosen.media_type,
@@ -320,9 +505,8 @@ def ingest(
             ),
             added=planned,
             planned=plan_rows,
-            skipped=[] if not variety_matches else [
-                f.name for f in share_videos if f.fid not in {m.file.fid for m in variety_matches}
-            ][:50],
+            renamed=renamed_rows,
+            skipped=skipped_names,
             message=(
                 f"dry_run — cloud={cloud_name} query='{query}' season={season_hint} "
                 f"variety={variety} matched={len(variety_matches)} 未执行转存"
@@ -330,6 +514,14 @@ def ingest(
         )
 
     # ---- 5. 选定 staging,转存 ----
+    if rename_rules:
+        staged_videos, renamed_rows = _apply_rename_rules(
+            qc,
+            original_staged_videos,
+            rename_rules,
+            dry_run=False,
+        )
+
     if chosen.media_type == "movie":
         staging_path = cloud_cfg.staging_movies
     else:
@@ -407,6 +599,10 @@ def ingest(
             status="error",
             message="转存后未在 staging 找到视频",
         )
+    if rename_rules:
+        staged_videos, renamed_rows = _apply_rename_rules(
+            qc, staged_videos, rename_rules, dry_run=False,
+        )
 
     # ---- 7. 落库 ----
     if chosen.media_type == "movie":
@@ -420,6 +616,7 @@ def ingest(
             library_tv_root=tv_library_root,
         )
     result.tmdb_id = chosen.id
+    result.renamed = renamed_rows
 
     # ---- 8. 刮削剧/片级元数据(tvshow.nfo / movie.nfo + poster + fanart) ----
     if cfg.policy.write_metadata and result.status == "ok":
@@ -437,6 +634,239 @@ def ingest(
 
     # ---- 9. 清理 staging 留下的空壳 ----
     _cleanup_empty(qc, staging_fid, set(saved_top_fids))
+    return result
+
+
+def ingest_folder(
+    cfg: Config,
+    cloud_name: str,
+    folder_path: str,
+    hint: Optional[str] = None,
+    media_type: Optional[str] = None,
+    auto_yes: bool = False,
+    dry_run: bool = False,
+    tmdb_id: Optional[int] = None,
+    season: Optional[int] = None,
+    variety: bool = False,
+    rename_plan: Any = None,
+) -> IngestResult:
+    qc = cloud_by_name(cloud_name, cfg)
+    cloud_cfg = _cloud_config(cfg, cloud_name)
+    folder_fid = qc.resolve_path(folder_path)
+    if folder_fid is None:
+        return IngestResult(status="error", message=f"找不到网盘目录:{folder_path}")
+
+    original_staged_videos = _collect_videos_from_drive_folder(qc, folder_fid, folder_path)
+    if not original_staged_videos:
+        return IngestResult(status="error", message=f"目录里没找到视频文件:{folder_path}")
+
+    staged_videos = original_staged_videos
+    rename_rules = normalize_rename_plan(rename_plan)
+    renamed_rows: list[dict] = []
+    if rename_rules:
+        staged_videos, renamed_rows = _apply_rename_rules(
+            None,
+            staged_videos,
+            rename_rules,
+            dry_run=True,
+        )
+    videos = [v for v, _ in staged_videos]
+
+    tmdb = TMDB(cfg.tmdb.api_key, cfg.tmdb.language)
+    season_hint = season
+    query = ""
+    chosen_details: Optional[dict[str, Any]] = None
+
+    if tmdb_id is not None:
+        mt = media_type or ("tv" if season is not None else None)
+        if mt == "movie":
+            details = tmdb.movie_details(tmdb_id)
+            chosen_details = details
+            chosen = TMDBResult(
+                id=tmdb_id,
+                media_type="movie",
+                title=details.get("title") or details.get("original_title") or "",
+                original_title=details.get("original_title") or "",
+                year=(details.get("release_date") or "").split("-")[0] or None,
+                overview=details.get("overview") or "",
+                popularity=float(details.get("popularity") or 0.0),
+                poster_path=details.get("poster_path"),
+            )
+        else:
+            details = tmdb.tv_details(tmdb_id)
+            chosen_details = details
+            chosen = TMDBResult(
+                id=tmdb_id,
+                media_type="tv",
+                title=details.get("name") or details.get("original_name") or "",
+                original_title=details.get("original_name") or "",
+                year=(details.get("first_air_date") or "").split("-")[0] or None,
+                overview=details.get("overview") or "",
+                popularity=float(details.get("popularity") or 0.0),
+                poster_path=details.get("poster_path"),
+            )
+        if chosen.media_type == "tv" and season_hint is None:
+            season_hint = 1
+    else:
+        pick = _pick_query(videos, hint, media_type)
+        query = pick.query
+        season_hint = season_hint or pick.season
+        mt = pick.media_type
+        if season_hint is not None and mt is None:
+            mt = "tv"
+        if not query:
+            return IngestResult(
+                status="error",
+                message="无法从文件名或 hint 推断标题",
+                renamed=renamed_rows,
+            )
+        candidates = tmdb.search(query, year=pick.year, media_type=mt)[:5]
+        if not candidates:
+            return IngestResult(
+                status="error",
+                message=f"TMDB 未找到:{query} (year={pick.year} type={mt})",
+                renamed=renamed_rows,
+            )
+        if pick.year is None:
+            query_lower = query.strip().lower()
+            def _sort_key(c: TMDBResult) -> tuple:
+                title_match = (
+                    c.title.lower() == query_lower
+                    or c.original_title.lower() == query_lower
+                )
+                year_int = int(c.year) if c.year and c.year.isdigit() else 0
+                return (not title_match, -year_int, -c.popularity)
+            candidates = sorted(candidates, key=_sort_key)
+        if (
+            not auto_yes
+            and len(candidates) > 1
+            and cfg.policy.ask_when_ambiguous
+        ):
+            return IngestResult(
+                status="need_confirm",
+                renamed=renamed_rows,
+                candidates=[
+                    {
+                        "tmdb_id": c.id,
+                        "type": c.media_type,
+                        "title": c.title,
+                        "year": c.year,
+                        "popularity": round(c.popularity, 1),
+                        "overview": c.overview[:100],
+                    }
+                    for c in candidates
+                ],
+            )
+        chosen = candidates[0]
+
+    if variety and (chosen.media_type != "tv" or season_hint is None):
+        return IngestResult(
+            status="error",
+            type=chosen.media_type,
+            tmdb_id=chosen.id,
+            title=chosen.title,
+            year=chosen.year,
+            renamed=renamed_rows,
+            message="综艺严格模式需要 TV 条目和明确 season",
+        )
+
+    if chosen.media_type == "tv" and chosen_details is None:
+        chosen_details = tmdb.tv_details(chosen.id)
+    is_variety_show = (
+        chosen.media_type == "tv"
+        and (variety or _tmdb_says_variety(chosen_details or {}))
+    )
+    tv_library_root = (
+        _tv_library_root(cloud_cfg, is_variety=is_variety_show)
+        if chosen.media_type == "tv"
+        else cloud_cfg.library_tv
+    )
+    layout = Layout(title=chosen.title, year=chosen.year, media_type=chosen.media_type)
+
+    variety_matches = []
+    if variety and chosen.media_type == "tv" and season_hint is not None:
+        season_details = tmdb.tv_season(chosen.id, season_hint)
+        episodes = build_variety_episodes(season_details)
+        variety_matches = match_variety_files(videos, episodes)
+        if not variety_matches:
+            return IngestResult(
+                status="error",
+                type="tv",
+                tmdb_id=chosen.id,
+                title=chosen.title,
+                year=chosen.year,
+                renamed=renamed_rows,
+                message=f"综艺严格匹配未找到可入库正片 season={season_hint}",
+                skipped=[v.name for v in videos[:50]],
+            )
+
+    if dry_run:
+        planned: list[dict] = []
+        added: list[str] = []
+        skipped: list[str] = []
+        if chosen.media_type == "movie":
+            added = [
+                layout.movie_filename(v.ext, part=(i + 1) if len(videos) > 1 else None)
+                for i, v in enumerate(videos)
+            ]
+        elif variety_matches and season_hint is not None:
+            for m in variety_matches:
+                target = layout.tv_filename(season_hint, m.episode.number, m.file.ext)
+                added.append(target)
+                planned.append({
+                    "episode": m.episode.number,
+                    "source": m.file.name,
+                    "target": target,
+                    "score": m.score,
+                    "reasons": list(m.reasons),
+                })
+            matched_fids = {m.file.fid for m in variety_matches}
+            skipped = [v.name for v in videos if v.fid not in matched_fids][:50]
+        else:
+            added, skipped = _plan_tv_targets(layout, staged_videos, season_hint)
+
+        return IngestResult(
+            status="ok",
+            type=chosen.media_type,
+            tmdb_id=chosen.id,
+            title=chosen.title,
+            year=chosen.year,
+            path=(
+                layout.movie_dir(cloud_cfg.library_movies)
+                if chosen.media_type == "movie"
+                else layout.tv_show_dir(tv_library_root)
+            ),
+            added=added,
+            skipped=skipped,
+            planned=planned,
+            renamed=renamed_rows,
+            message=(
+                f"dry_run — cloud={cloud_name} folder='{folder_path}' "
+                f"season={season_hint} variety={variety} 未执行移动"
+            ),
+        )
+
+    if chosen.media_type == "movie":
+        result = _finalize_movie(qc, cfg, cloud_cfg, layout, staged_videos)
+    else:
+        result = _finalize_tv(
+            qc, cfg, cloud_cfg, layout, staged_videos, season_hint,
+            tmdb=tmdb if (cfg.policy.write_metadata or variety) else None,
+            tmdb_id=chosen.id,
+            variety=variety,
+            library_tv_root=tv_library_root,
+        )
+    result.tmdb_id = chosen.id
+    result.renamed = renamed_rows
+
+    if cfg.policy.write_metadata and result.status == "ok":
+        try:
+            _write_show_metadata(
+                qc, tmdb, cloud_cfg, layout, chosen,
+                library_tv_root=tv_library_root if chosen.media_type == "tv" else None,
+            )
+        except Exception as e:
+            result.message = f"{result.message} | 元数据失败: {e}" if result.message else f"元数据失败: {e}"
     return result
 
 
