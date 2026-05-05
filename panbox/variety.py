@@ -11,6 +11,8 @@ from .matcher import _cn_to_int
 
 _DATE_YYYYMMDD = re.compile(r"(?<!\d)(20\d{2})[.\-_/年]?\s*(\d{2})[.\-_/月]?\s*(\d{2})(?!\d)")
 _DATE_YYMMDD = re.compile(r"(?<!\d)(\d{2})[.\-_/](\d{2})[.\-_/](\d{2})(?!\d)")
+_SXEX_RE = re.compile(r"[sS](\d{1,2})[\s._\-]*[eE](\d{1,3})")
+_EX_RE = re.compile(r"(?<![A-Za-z0-9])[eE](\d{1,3})(?!\d)")
 _PERIOD_RE = re.compile(
     r"第\s*([0-9零〇一二两三四五六七八九十]+)\s*(?:期|集)\s*[：:：,，、.\-_\s]*([上中下])?"
 )
@@ -54,6 +56,7 @@ class VarietyEpisode:
     period: Optional[int]
     part: Optional[str]
     keywords: tuple[str, ...]
+    season: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,7 @@ class VarietyMatch:
 
 def build_variety_episodes(season_details: dict[str, Any]) -> list[VarietyEpisode]:
     episodes: list[VarietyEpisode] = []
+    season_number = _safe_int(season_details.get("season_number"))
     for item in season_details.get("episodes") or []:
         number = item.get("episode_number")
         if number is None:
@@ -82,6 +86,7 @@ def build_variety_episodes(season_details: dict[str, Any]) -> list[VarietyEpisod
                 period=period,
                 part=part,
                 keywords=episode_keywords(name),
+                season=season_number,
             )
         )
     return episodes
@@ -125,9 +130,16 @@ def score_file_for_episode(
     name = normalize_text(file.name)
     ep_name = normalize_text(episode.name)
     file_date = parse_date(file.name)
+    file_season, file_episode = extract_sxex(file.name)
     file_period, file_part = extract_period_part(file.name)
 
     if any(k in name and k not in ep_name for k in _NEGATIVE_KEYWORDS):
+        return None
+
+    if file_season is not None and episode.season is not None and file_season != episode.season:
+        return None
+
+    if file_episode is not None and file_episode != episode.number:
         return None
 
     date_delta: Optional[int] = None
@@ -154,6 +166,10 @@ def score_file_for_episode(
 
     score = 0
     reasons: list[str] = []
+
+    if file_episode is not None and file_episode == episode.number:
+        score += 120
+        reasons.append("sxex" if file_season is not None else "episode")
 
     if file_date and episode.air_date and file_date == episode.air_date:
         score += 100
@@ -193,6 +209,16 @@ def parse_date(text: str) -> Optional[date]:
         full_year = 2000 + year if year < 80 else 1900 + year
         return _date_from_parts(str(full_year), m.group(2), m.group(3))
     return None
+
+
+def extract_sxex(text: str) -> tuple[Optional[int], Optional[int]]:
+    m = _SXEX_RE.search(text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = _EX_RE.search(text)
+    if m:
+        return None, int(m.group(1))
+    return None, None
 
 
 def extract_period_part(text: str) -> tuple[Optional[int], Optional[str]]:
@@ -237,4 +263,13 @@ def _date_from_parts(year: str, month: str, day: str) -> Optional[date]:
     try:
         return date(int(year), int(month), int(day))
     except ValueError:
+        return None
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
         return None

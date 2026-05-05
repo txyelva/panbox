@@ -7,6 +7,7 @@ from panbox.clouds.base import RemoteFile
 from panbox.variety import (
     VarietyEpisode,
     build_variety_episodes,
+    extract_sxex,
     extract_period_part,
     match_variety_files,
     parse_date,
@@ -26,6 +27,11 @@ class VarietyMatcherTest(unittest.TestCase):
         self.assertEqual(extract_period_part("第1期：初舞台（上）"), (1, "上"))
         self.assertEqual(extract_period_part("20260404期-第1期下.mp4"), (1, "下"))
         self.assertEqual(extract_period_part("第十一期"), (11, None))
+
+    def test_extract_sxex_variants(self) -> None:
+        self.assertEqual(extract_sxex("Show.S01E02.mp4"), (1, 2))
+        self.assertEqual(extract_sxex("Show s01.e003.mkv"), (1, 3))
+        self.assertEqual(extract_sxex("Show E04.mp4"), (None, 4))
 
     def test_running_man_matches_date_period_and_rejects_extras(self) -> None:
         episodes = [
@@ -76,6 +82,33 @@ class VarietyMatcherTest(unittest.TestCase):
                 (1, "20260403期-第1期上.mp4"),
                 (2, "20260405期-第1期下.mp4"),
                 (3, "20260410期-第2期上.mp4"),
+            ],
+        )
+
+    def test_variety_accepts_explicit_sxex_without_date(self) -> None:
+        episodes = build_variety_episodes(
+            {
+                "season_number": 1,
+                "episodes": [
+                    {"episode_number": 1, "name": "第 1 集", "air_date": "2026-05-01"},
+                    {"episode_number": 2, "name": "第 2 集", "air_date": "2026-05-08"},
+                ],
+            }
+        )
+        files = [
+            video("1", "Some.Variety.S01E01.mp4"),
+            video("2", "Some.Variety.S01E02.mkv"),
+            video("3", "Some.Variety.S01E01.加更.mp4"),
+            video("4", "Some.Variety.S02E01.mp4"),
+        ]
+
+        matches = match_variety_files(files, episodes)
+
+        self.assertEqual(
+            [(m.episode.number, m.file.name, m.reasons[0]) for m in matches],
+            [
+                (1, "Some.Variety.S01E01.mp4", "sxex"),
+                (2, "Some.Variety.S01E02.mkv", "sxex"),
             ],
         )
 
