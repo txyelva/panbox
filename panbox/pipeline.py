@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field, replace
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .clouds import from_url as cloud_from_url
 from .clouds import by_name as cloud_by_name
@@ -40,6 +40,7 @@ class IngestResult:
     candidates: list[dict] = field(default_factory=list)
     planned: list[dict] = field(default_factory=list)
     renamed: list[dict] = field(default_factory=list)
+    metadata: list[dict] = field(default_factory=list)
     message: Optional[str] = None
 
 
@@ -56,6 +57,14 @@ class RenameRule:
     source: Optional[str]
     target: str
     fid: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ScrapeVideo:
+    file: RemoteFile
+    folder_season: Optional[int]
+    parent_fid: str
+    parent_path: str
 
 
 def _tmdb_says_variety(details: dict[str, Any]) -> bool:
@@ -88,6 +97,43 @@ def _cloud_config(cfg: Config, cloud_name: str) -> Any:
     if not hasattr(cfg, attr):
         raise ValueError(f"未知云盘:{cloud_name}")
     return getattr(cfg, attr)
+
+
+def _tmdb_result_from_details(
+    tmdb: TMDB,
+    tmdb_id: int,
+    media_type: Optional[str],
+) -> tuple[TMDBResult, dict[str, Any]]:
+    if media_type == "movie":
+        details = tmdb.movie_details(tmdb_id)
+        return (
+            TMDBResult(
+                id=tmdb_id,
+                media_type="movie",
+                title=details.get("title") or details.get("original_title") or "",
+                original_title=details.get("original_title") or "",
+                year=(details.get("release_date") or "").split("-")[0] or None,
+                overview=details.get("overview") or "",
+                popularity=float(details.get("popularity") or 0.0),
+                poster_path=details.get("poster_path"),
+            ),
+            details,
+        )
+
+    details = tmdb.tv_details(tmdb_id)
+    return (
+        TMDBResult(
+            id=tmdb_id,
+            media_type="tv",
+            title=details.get("name") or details.get("original_name") or "",
+            original_title=details.get("original_name") or "",
+            year=(details.get("first_air_date") or "").split("-")[0] or None,
+            overview=details.get("overview") or "",
+            popularity=float(details.get("popularity") or 0.0),
+            poster_path=details.get("poster_path"),
+        ),
+        details,
+    )
 
 
 def normalize_rename_plan(plan: Any) -> list[RenameRule]:
@@ -199,6 +245,55 @@ def _collect_videos_from_drive_folder(
                 out.append((f, inherited))
 
     walk(folder_fid, root_season)
+    return out
+
+
+def _join_cloud_path(parent: str, name: str) -> str:
+    original = parent
+    parent = parent.rstrip("/")
+    if not parent:
+        return f"/{name}" if original.startswith("/") else name
+    return f"{parent}/{name}"
+
+
+def _parent_cloud_path(path: str) -> str:
+    stripped = path.rstrip("/")
+    if not stripped or stripped == "/":
+        return "/"
+    parent, _, _ = stripped.rpartition("/")
+    return parent or "/"
+
+
+def _collect_scrape_videos(
+    qc: Cloud,
+    folder_fid: str,
+    folder_path: str,
+) -> list[ScrapeVideo]:
+    """Collect videos with their actual parent folder, for in-place scraping."""
+    out: list[ScrapeVideo] = []
+    root_path = folder_path.rstrip("/") or "/"
+    root_season = parse_season_from_name(root_path.rsplit("/", 1)[-1])
+
+    def walk(fid: str, path: str, inherited: Optional[int]) -> None:
+        for f in qc.list_dir(fid):
+            if f.is_dir:
+                sub = parse_season_from_name(f.name)
+                walk(
+                    f.fid,
+                    _join_cloud_path(path, f.name),
+                    sub if sub is not None else inherited,
+                )
+            elif f.is_video:
+                out.append(
+                    ScrapeVideo(
+                        file=replace(f, parent_fid=f.parent_fid or fid),
+                        folder_season=inherited,
+                        parent_fid=f.parent_fid or fid,
+                        parent_path=path,
+                    )
+                )
+
+    walk(folder_fid, root_path, root_season)
     return out
 
 
@@ -514,14 +609,6 @@ def ingest(
         )
 
     # ---- 5. 选定 staging,转存 ----
-    if rename_rules:
-        staged_videos, renamed_rows = _apply_rename_rules(
-            qc,
-            original_staged_videos,
-            rename_rules,
-            dry_run=False,
-        )
-
     if chosen.media_type == "movie":
         staging_path = cloud_cfg.staging_movies
     else:
@@ -621,9 +708,11 @@ def ingest(
     # ---- 8. 刮削剧/片级元数据(tvshow.nfo / movie.nfo + poster + fanart) ----
     if cfg.policy.write_metadata and result.status == "ok":
         try:
-            _write_show_metadata(
-                qc, tmdb, cloud_cfg, layout, chosen,
-                library_tv_root=tv_library_root if chosen.media_type == "tv" else None,
+            result.metadata.extend(
+                _write_show_metadata(
+                    qc, tmdb, cloud_cfg, layout, chosen,
+                    library_tv_root=tv_library_root if chosen.media_type == "tv" else None,
+                )
             )
         except Exception as e:
             # 元数据写入失败不影响主流程
@@ -861,13 +950,399 @@ def ingest_folder(
 
     if cfg.policy.write_metadata and result.status == "ok":
         try:
-            _write_show_metadata(
-                qc, tmdb, cloud_cfg, layout, chosen,
-                library_tv_root=tv_library_root if chosen.media_type == "tv" else None,
+            result.metadata.extend(
+                _write_show_metadata(
+                    qc, tmdb, cloud_cfg, layout, chosen,
+                    library_tv_root=tv_library_root if chosen.media_type == "tv" else None,
+                )
             )
         except Exception as e:
             result.message = f"{result.message} | 元数据失败: {e}" if result.message else f"元数据失败: {e}"
     return result
+
+
+def scrape_folder(
+    cfg: Config,
+    cloud_name: str,
+    folder_path: str,
+    hint: Optional[str] = None,
+    media_type: Optional[str] = None,
+    auto_yes: bool = False,
+    dry_run: bool = False,
+    tmdb_id: Optional[int] = None,
+    season: Optional[int] = None,
+    variety: bool = False,
+    rename_plan: Any = None,
+    force: bool = False,
+) -> IngestResult:
+    """对网盘内已存在目录原地补刮削元数据,不移动视频文件。"""
+    qc = cloud_by_name(cloud_name, cfg)
+    folder_fid = qc.resolve_path(folder_path)
+    if folder_fid is None:
+        return IngestResult(status="error", message=f"找不到网盘目录:{folder_path}")
+
+    scrape_videos = _collect_scrape_videos(qc, folder_fid, folder_path)
+    if not scrape_videos:
+        return IngestResult(status="error", message=f"目录里没找到视频文件:{folder_path}")
+
+    staged = [(sv.file, sv.folder_season) for sv in scrape_videos]
+    rename_rules = normalize_rename_plan(rename_plan)
+    renamed_rows: list[dict] = []
+    if rename_rules:
+        staged, renamed_rows = _apply_rename_rules(
+            None if dry_run else qc,
+            staged,
+            rename_rules,
+            dry_run=dry_run,
+        )
+        scrape_videos = [
+            ScrapeVideo(
+                file=file,
+                folder_season=folder_season,
+                parent_fid=sv.parent_fid,
+                parent_path=sv.parent_path,
+            )
+            for sv, (file, folder_season) in zip(scrape_videos, staged)
+        ]
+
+    videos = [sv.file for sv in scrape_videos]
+    folder_seasons = {sv.folder_season for sv in scrape_videos if sv.folder_season is not None}
+    season_hint = season
+    if season_hint is None and len(folder_seasons) == 1:
+        season_hint = next(iter(folder_seasons))
+
+    tmdb = TMDB(cfg.tmdb.api_key, cfg.tmdb.language)
+    chosen_details: Optional[dict[str, Any]] = None
+    query = ""
+
+    if tmdb_id is not None:
+        mt = media_type or ("tv" if season_hint is not None else None)
+        chosen, chosen_details = _tmdb_result_from_details(tmdb, tmdb_id, mt)
+        if chosen.media_type == "tv" and season_hint is None:
+            season_hint = 1
+    else:
+        pick = _pick_query(videos, hint, media_type)
+        query = pick.query
+        season_hint = season_hint or pick.season
+        mt = pick.media_type
+        if season_hint is not None and mt is None:
+            mt = "tv"
+        if not query:
+            return IngestResult(
+                status="error",
+                renamed=renamed_rows,
+                message="无法从文件名或 hint 推断标题",
+            )
+        candidates = tmdb.search(query, year=pick.year, media_type=mt)[:5]
+        if not candidates:
+            return IngestResult(
+                status="error",
+                renamed=renamed_rows,
+                message=f"TMDB 未找到:{query} (year={pick.year} type={mt})",
+            )
+        if pick.year is None:
+            query_lower = query.strip().lower()
+
+            def _sort_key(c: TMDBResult) -> tuple:
+                title_match = (
+                    c.title.lower() == query_lower
+                    or c.original_title.lower() == query_lower
+                )
+                year_int = int(c.year) if c.year and c.year.isdigit() else 0
+                return (not title_match, -year_int, -c.popularity)
+
+            candidates = sorted(candidates, key=_sort_key)
+        if (
+            not auto_yes
+            and len(candidates) > 1
+            and cfg.policy.ask_when_ambiguous
+        ):
+            return IngestResult(
+                status="need_confirm",
+                renamed=renamed_rows,
+                candidates=[
+                    {
+                        "tmdb_id": c.id,
+                        "type": c.media_type,
+                        "title": c.title,
+                        "year": c.year,
+                        "popularity": round(c.popularity, 1),
+                        "overview": c.overview[:100],
+                    }
+                    for c in candidates
+                ],
+            )
+        chosen = candidates[0]
+
+    if variety and (chosen.media_type != "tv" or season_hint is None):
+        return IngestResult(
+            status="error",
+            type=chosen.media_type,
+            tmdb_id=chosen.id,
+            title=chosen.title,
+            year=chosen.year,
+            renamed=renamed_rows,
+            message="综艺严格模式需要 TV 条目和明确 season",
+        )
+
+    layout = Layout(title=chosen.title, year=chosen.year, media_type=chosen.media_type)
+    metadata_rows: list[dict] = []
+    skipped: list[str] = []
+
+    root_path = folder_path.rstrip("/") or "/"
+    if chosen.media_type == "movie":
+        movie_nfo_name = f"{layout.folder_name}.nfo"
+        if len(videos) == 1:
+            movie_nfo_name = f"{videos[0].name.rsplit('.', 1)[0]}.nfo"
+        metadata_rows.extend(
+            _write_root_metadata(
+                qc,
+                tmdb,
+                folder_fid,
+                root_path,
+                "movie",
+                chosen.id,
+                movie_nfo_name,
+                details=chosen_details,
+                dry_run=dry_run,
+                force=force,
+            )
+        )
+        return IngestResult(
+            status="ok",
+            type="movie",
+            tmdb_id=chosen.id,
+            title=chosen.title,
+            year=chosen.year,
+            path=root_path,
+            skipped=skipped,
+            renamed=renamed_rows,
+            metadata=metadata_rows,
+            message=f"{'dry_run — ' if dry_run else ''}metadata-only cloud={cloud_name} folder='{folder_path}'",
+        )
+
+    if chosen_details is None:
+        chosen_details = tmdb.tv_details(chosen.id)
+
+    show_root_fid = folder_fid
+    show_root_path = root_path
+    if parse_season_from_name(root_path.rsplit("/", 1)[-1]) is not None:
+        parent_path = _parent_cloud_path(root_path)
+        parent_fid = qc.resolve_path(parent_path)
+        if parent_fid is not None:
+            show_root_fid = parent_fid
+            show_root_path = parent_path
+
+    metadata_rows.extend(
+        _write_root_metadata(
+            qc,
+            tmdb,
+            show_root_fid,
+            show_root_path,
+            "tv",
+            chosen.id,
+            "tvshow.nfo",
+            details=chosen_details,
+            dry_run=dry_run,
+            force=force,
+        )
+    )
+
+    has_multi_folder_season = len(folder_seasons) > 1
+    variety_by_fid: dict[str, int] = {}
+    if variety and season_hint is not None:
+        try:
+            season_details = tmdb.tv_season(chosen.id, season_hint)
+            episodes = build_variety_episodes(season_details)
+            matches = match_variety_files(videos, episodes)
+            variety_by_fid = {m.file.fid: m.episode.number for m in matches}
+        except Exception:
+            variety_by_fid = {}
+
+    existing_cache: dict[str, dict[str, RemoteFile]] = {}
+    for sv in scrape_videos:
+        if variety:
+            if season_hint is None or sv.file.fid not in variety_by_fid:
+                skipped.append(sv.file.name)
+                continue
+            s = int(season_hint)
+            ep: Any = variety_by_fid[sv.file.fid]
+        else:
+            g = Guess.from_text(sv.file.name)
+            s = g.season
+            if s is None:
+                s = sv.folder_season
+            if s is None:
+                s = season_hint
+            ep = g.episode
+            if ep is None:
+                skipped.append(sv.file.name)
+                continue
+            if s is None:
+                if has_multi_folder_season:
+                    skipped.append(sv.file.name)
+                    continue
+                s = 1
+
+        ep_list = ep if isinstance(ep, list) else [ep]
+        try:
+            ep_ints = [int(e) for e in ep_list]
+        except (TypeError, ValueError):
+            skipped.append(sv.file.name)
+            continue
+
+        existing = existing_cache.get(sv.parent_fid)
+        if existing is None:
+            existing = {f.name: f for f in qc.list_dir(sv.parent_fid)}
+            existing_cache[sv.parent_fid] = existing
+        metadata_rows.extend(
+            _write_episode_metadata(
+                qc,
+                tmdb,
+                chosen.id,
+                int(s),
+                ep_ints,
+                sv.parent_fid,
+                sv.file.name,
+                existing,
+                parent_path=sv.parent_path,
+                dry_run=dry_run,
+                force=force,
+            )
+        )
+
+    return IngestResult(
+        status="ok",
+        type="tv",
+        tmdb_id=chosen.id,
+        title=chosen.title,
+        year=chosen.year,
+        path=show_root_path,
+        skipped=skipped,
+        renamed=renamed_rows,
+        metadata=metadata_rows,
+        message=f"{'dry_run — ' if dry_run else ''}metadata-only cloud={cloud_name} folder='{folder_path}' season={season_hint} variety={variety}",
+    )
+
+
+def _metadata_path(parent_path: str, name: str) -> str:
+    return _join_cloud_path(parent_path, name)
+
+
+def _upload_metadata_file(
+    qc: Cloud,
+    parent_fid: str,
+    parent_path: str,
+    name: str,
+    kind: str,
+    existing: dict[str, RemoteFile],
+    payload: Callable[[], bytes],
+    *,
+    mime: str,
+    dry_run: bool = False,
+    force: bool = False,
+) -> dict:
+    existing_file = existing.get(name)
+    row = {
+        "kind": kind,
+        "name": name,
+        "path": _metadata_path(parent_path, name),
+        "status": "exists",
+    }
+    if existing_file is not None and not force:
+        return row
+    if dry_run:
+        row["status"] = "would_overwrite" if existing_file is not None else "would_create"
+        return row
+
+    try:
+        if existing_file is not None and force:
+            qc.delete([existing_file.fid])
+        new_fid = qc.upload_bytes(parent_fid, name, payload(), mime=mime)
+        fallback_fid = existing_file.fid if existing_file is not None else name
+        existing[name] = RemoteFile(
+            fid=new_fid or fallback_fid,
+            name=name,
+            is_dir=False,
+            parent_fid=parent_fid,
+        )
+        row["status"] = "overwritten" if existing_file is not None else "created"
+    except Exception as e:
+        row["status"] = "error"
+        row["message"] = str(e)
+    return row
+
+
+def _write_root_metadata(
+    qc: Cloud,
+    tmdb: TMDB,
+    target_fid: str,
+    target_path: str,
+    media_type: str,
+    tmdb_id: int,
+    nfo_name: str,
+    *,
+    details: Optional[dict[str, Any]] = None,
+    dry_run: bool = False,
+    force: bool = False,
+) -> list[dict]:
+    if media_type == "movie":
+        details = details or tmdb.movie_details(tmdb_id)
+        nfo_text = nfo_mod.movie_nfo(details)
+    else:
+        details = details or tmdb.tv_details(tmdb_id)
+        nfo_text = nfo_mod.tvshow_nfo(details)
+
+    existing = {f.name: f for f in qc.list_dir(target_fid)}
+    rows = [
+        _upload_metadata_file(
+            qc,
+            target_fid,
+            target_path,
+            nfo_name,
+            "movie_nfo" if media_type == "movie" else "tvshow_nfo",
+            existing,
+            lambda text=nfo_text: text.encode("utf-8"),
+            mime="application/xml",
+            dry_run=dry_run,
+            force=force,
+        )
+    ]
+
+    poster_url = artwork.build_url(details.get("poster_path"))
+    if poster_url:
+        rows.append(
+            _upload_metadata_file(
+                qc,
+                target_fid,
+                target_path,
+                "poster.jpg",
+                "poster",
+                existing,
+                lambda url=poster_url: artwork.download(url),
+                mime="image/jpeg",
+                dry_run=dry_run,
+                force=force,
+            )
+        )
+
+    fanart_url = artwork.build_url(details.get("backdrop_path"))
+    if fanart_url:
+        rows.append(
+            _upload_metadata_file(
+                qc,
+                target_fid,
+                target_path,
+                "fanart.jpg",
+                "fanart",
+                existing,
+                lambda url=fanart_url: artwork.download(url),
+                mime="image/jpeg",
+                dry_run=dry_run,
+                force=force,
+            )
+        )
+    return rows
 
 
 def _write_show_metadata(
@@ -877,45 +1352,25 @@ def _write_show_metadata(
     layout: Layout,
     chosen: TMDBResult,
     library_tv_root: Optional[str] = None,
-) -> None:
+) -> list[dict]:
     """拉 TMDB 详情 → 生成 tvshow.nfo / movie.nfo → 下载 poster/fanart → 上传到媒体库根目录。"""
     if chosen.media_type == "movie":
-        details = tmdb.movie_details(chosen.id)
         target_dir = layout.movie_dir(cloud_cfg.library_movies)
         nfo_name = f"{layout.folder_name}.nfo"
-        nfo_text = nfo_mod.movie_nfo(details)
     else:
-        details = tmdb.tv_details(chosen.id)
         target_dir = layout.tv_show_dir(library_tv_root or cloud_cfg.library_tv)
         nfo_name = "tvshow.nfo"
-        nfo_text = nfo_mod.tvshow_nfo(details)
 
     target_fid = qc.mkdir_p(target_dir)
-    existing = {f.name for f in qc.list_dir(target_fid)}
-
-    if nfo_name not in existing:
-        qc.upload_bytes(
-            target_fid,
-            nfo_name,
-            nfo_text.encode("utf-8"),
-            mime="application/xml",
-        )
-
-    poster_url = artwork.build_url(details.get("poster_path"))
-    if poster_url and "poster.jpg" not in existing:
-        try:
-            data = artwork.download(poster_url)
-            qc.upload_bytes(target_fid, "poster.jpg", data, mime="image/jpeg")
-        except Exception:
-            pass
-
-    fanart_url = artwork.build_url(details.get("backdrop_path"))
-    if fanart_url and "fanart.jpg" not in existing:
-        try:
-            data = artwork.download(fanart_url)
-            qc.upload_bytes(target_fid, "fanart.jpg", data, mime="image/jpeg")
-        except Exception:
-            pass
+    return _write_root_metadata(
+        qc,
+        tmdb,
+        target_fid,
+        target_dir,
+        chosen.media_type,
+        chosen.id,
+        nfo_name,
+    )
 
 
 def _write_episode_metadata(
@@ -926,8 +1381,12 @@ def _write_episode_metadata(
     ep_ints: list[int],
     season_fid: str,
     video_filename: str,
-    existing_names: set[str],
-) -> None:
+    existing: dict[str, RemoteFile],
+    *,
+    parent_path: str,
+    dry_run: bool = False,
+    force: bool = False,
+) -> list[dict]:
     """为单集视频写 {base}.nfo + {base}-thumb.jpg。
 
     video_filename 形如 "标题 - S01E02.mp4",base 即去掉扩展名。
@@ -937,34 +1396,69 @@ def _write_episode_metadata(
     nfo_name = f"{base}.nfo"
     thumb_name = f"{base}-thumb.jpg"
 
-    if nfo_name in existing_names and thumb_name in existing_names:
-        return
+    if nfo_name in existing and thumb_name in existing and not force:
+        return [
+            {
+                "kind": "episode_nfo",
+                "name": nfo_name,
+                "path": _metadata_path(parent_path, nfo_name),
+                "status": "exists",
+            },
+            {
+                "kind": "episode_thumb",
+                "name": thumb_name,
+                "path": _metadata_path(parent_path, thumb_name),
+                "status": "exists",
+            },
+        ]
 
     try:
         ep_detail = tmdb.tv_episode(tmdb_id, season, ep_ints[0])
-    except Exception:
-        return
+    except Exception as e:
+        return [
+            {
+                "kind": "episode_metadata",
+                "name": base,
+                "path": _metadata_path(parent_path, video_filename),
+                "status": "error",
+                "message": str(e),
+            }
+        ]
 
-    if nfo_name not in existing_names:
-        try:
-            text = nfo_mod.episode_nfo(ep_detail)
-            qc.upload_bytes(
-                season_fid, nfo_name, text.encode("utf-8"), mime="application/xml"
-            )
-            existing_names.add(nfo_name)
-        except Exception:
-            pass
+    rows = [
+        _upload_metadata_file(
+            qc,
+            season_fid,
+            parent_path,
+            nfo_name,
+            "episode_nfo",
+            existing,
+            lambda detail=ep_detail: nfo_mod.episode_nfo(detail).encode("utf-8"),
+            mime="application/xml",
+            dry_run=dry_run,
+            force=force,
+        )
+    ]
 
     still = ep_detail.get("still_path")
-    if still and thumb_name not in existing_names:
+    if still:
         url = artwork.build_url(still)
         if url:
-            try:
-                data = artwork.download(url)
-                qc.upload_bytes(season_fid, thumb_name, data, mime="image/jpeg")
-                existing_names.add(thumb_name)
-            except Exception:
-                pass
+            rows.append(
+                _upload_metadata_file(
+                    qc,
+                    season_fid,
+                    parent_path,
+                    thumb_name,
+                    "episode_thumb",
+                    existing,
+                    lambda thumb_url=url: artwork.download(thumb_url),
+                    mime="image/jpeg",
+                    dry_run=dry_run,
+                    force=force,
+                )
+            )
+    return rows
 
 
 def _cleanup_empty(qc: Cloud, staging_fid: str, top_fids: set[str]) -> None:
@@ -1160,6 +1654,7 @@ def _finalize_tv(
 
     added: list[str] = []
     skipped: list[str] = [v.name for v in orphans]
+    metadata_rows: list[dict] = []
     seasons = sorted({s for s, _, _ in parsed})
     last_target: str = ""
 
@@ -1183,7 +1678,7 @@ def _finalize_tv(
         last_target = season_dir
         existing_files = qc.list_dir(season_fid)
         existing_eps = scan_existing_episodes(existing_files, s)
-        existing_names = {f.name for f in existing_files}
+        existing_by_name = {f.name: f for f in existing_files}
 
         for ss, ep, v in parsed:
             if ss != s:
@@ -1208,14 +1703,17 @@ def _finalize_tv(
             qc.move([v.fid], season_fid)
             added.append(new_name)
             existing_eps.update(ep_ints)
-            existing_names.add(new_name)
+            existing_by_name[new_name] = replace(v, name=new_name, parent_fid=season_fid)
 
             # 每集 NFO + thumb
             if cfg.policy.write_metadata and tmdb is not None and tmdb_id is not None:
                 try:
-                    _write_episode_metadata(
-                        qc, tmdb, tmdb_id, s, ep_ints,
-                        season_fid, new_name, existing_names,
+                    metadata_rows.extend(
+                        _write_episode_metadata(
+                            qc, tmdb, tmdb_id, s, ep_ints,
+                            season_fid, new_name, existing_by_name,
+                            parent_path=season_dir,
+                        )
                     )
                 except Exception:
                     pass
@@ -1228,4 +1726,5 @@ def _finalize_tv(
         path=last_target or layout.tv_show_dir(tv_root),
         added=added,
         skipped=skipped,
+        metadata=metadata_rows,
     )

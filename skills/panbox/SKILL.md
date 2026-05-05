@@ -53,6 +53,19 @@ panbox ingest-folder <网盘内目录路径> \
     [--yes] \
     [--dry-run] \
     --json
+
+panbox scrape-folder <网盘内目录路径> \
+    --cloud quark|ali|115|baidu \
+    [--hint "准确剧名"] \
+    [--type movie|tv] \
+    [--tmdb-id 12345] \
+    [--season 14] \
+    [--variety] \
+    [--rename-plan rename-plan.json] \
+    [--force] \
+    [--yes] \
+    [--dry-run] \
+    --json
 ```
 
 **必须加 `--json`**,拿结构化结果再向用户汇报。不要解析人类输出。
@@ -71,14 +84,27 @@ panbox ingest-folder <网盘内目录路径> \
 | `candidates` | `status=need_confirm` 时的候选 TMDB 结果,含 `tmdb_id/title/year/type/overview` |
 | `planned` | dry-run 计划映射,综艺严格模式下含 `episode/source/target/score/reasons` |
 | `renamed` | dry-run 或执行时的批量重命名映射,含 `source/target/fid` |
+| `metadata` | 元数据补写结果,含 `kind/name/path/status/message`;`status` 可能是 `created` / `exists` / `would_create` / `would_overwrite` / `overwritten` / `error` |
 | `message` | 补充说明或错误信息 |
 
-## 批量重命名与已转存目录
+## 可恢复工作流:分享、已转存、已入库
+
+panbox 的核心原则是按“当前真实状态”继续,不要为了回到理想入口而删除重来:
+
+- 还在分享链接里,未转存 → `panbox ingest <URL> ...`
+- 已经转存到自己网盘的临时目录,还没归库 → `panbox ingest-folder "<目录路径>" --cloud <云盘> ...`
+- 已经在媒体库或用户手动放好,只缺 NFO/海报/缩略图 → `panbox scrape-folder "<目录路径>" --cloud <云盘> ...`
+- 只想验证标题/TMDB → `panbox identify --name/--file ...`
+
+如果 OpenClaw/Claude 上一轮提示“31 集都 skipped,但没有生成元数据”,下一步不是建议 TinyMediaManager、删除重入库,也不是说 panbox 做不了;应该直接用 `scrape-folder` 补元数据。
+
+## 批量重命名
 
 当文件名太乱、日期缺年份、只有日期/期名导致 panbox 识别不了时,不要再用旧包装脚本,也不要调用内部私有函数。使用正式参数:
 
 - 分享链接流程:`panbox ingest ... --rename-plan rename-plan.json --dry-run --json`
 - 已经转存到自己网盘里的目录:`panbox ingest-folder "<目录路径>" --cloud <云盘> ... --dry-run --json`
+- 已经在媒体库里,只需要原地改名和补元数据:`panbox scrape-folder "<目录路径>" --cloud <云盘> ... --rename-plan rename-plan.json --dry-run --json`
 
 `rename-plan.json` 支持对象映射:
 
@@ -104,10 +130,32 @@ panbox ingest-folder <网盘内目录路径> \
 
 1. 先列出用户要改名的源文件名和目标名,让用户确认。
 2. 写 `rename-plan.json`。
-3. 先 dry-run,检查 JSON 里的 `renamed` 和 `added/planned`。
+3. 先 dry-run,检查 JSON 里的 `renamed`、`added/planned` 或 `metadata`。
 4. 用户确认后,同一命令去掉 `--dry-run`。
 
 绝对不要使用 `~/.openclaw/workspace/scripts/panbox_ingest_with_rename.py`;它是旧方案,会绕过 `--variety`、`library_variety` 和 TMDB Reality 分类逻辑。
+
+## 已入库目录补刮削
+
+`scrape-folder` 只处理元数据,不移动视频。适用场景:
+
+- 分享转存/入库中途限流,视频已经在目录里,但 NFO、poster、fanart 没写完。
+- 用户手动把文件放进媒体库目录后,希望 panbox 继续生成元数据。
+- `ingest-folder` 返回 `added=[]` 或大量 `skipped`,但用户明确要补海报/NFO。
+
+示例:
+
+```bash
+panbox scrape-folder "/影视剧/Variety/开始推理吧 (2022)" \
+  --cloud 115 \
+  --tmdb-id 203003 \
+  --season 1 \
+  --type tv \
+  --dry-run \
+  --json
+```
+
+确认 JSON 的 `metadata` 后,去掉 `--dry-run` 执行。默认只补缺失文件;如果用户明确要重刷,才加 `--force` 覆盖已存在的 NFO/图片。电影必须加 `--type movie` 或提供足够明确的 hint,否则 `--tmdb-id` 默认按 TV 处理。
 
 ## 综艺严格模式
 
@@ -207,6 +255,12 @@ panbox ingest <URL> --tmdb-id <id> --season <season> --type tv --variety --dry-r
 panbox ingest-folder "<目录路径>" --cloud <quark|ali|115|baidu> --hint "<hint>" --dry-run --json
 ```
 
+如果视频已经在媒体库/最终目录里,只是要补 NFO、海报、缩略图:
+
+```bash
+panbox scrape-folder "<目录路径>" --cloud <quark|ali|115|baidu> --tmdb-id <id> --season <season> --type tv --dry-run --json
+```
+
 ### 3. 根据结果分支
 
 **`status: ok`**:给用户展示识别结果,问一句确认:
@@ -219,6 +273,8 @@ panbox ingest-folder "<目录路径>" --cloud <quark|ali|115|baidu> --hint "<hin
 如果返回 `planned`,必须展示 source → target 的映射,方便用户确认综艺正片是否选对。
 
 如果返回 `renamed`,必须展示 rename source → target 的映射,让用户确认改名是否符合预期。
+
+如果返回 `metadata`,必须汇总哪些会创建/已存在/失败。`dry-run` 时重点看 `would_create` 和 `would_overwrite`;正式执行后重点看 `created`、`exists`、`error`。
 
 **`status: need_confirm`**:把 `candidates` 展示成编号列表,让用户选哪个。选好后把该候选的 `title ({year})` 作为新 hint 重跑(可加 `--yes` 跳过二次候选)。
 
@@ -237,7 +293,7 @@ panbox ingest <URL> --hint "<同样的 hint>" --yes --json
 
 综艺严格模式同理保留 `--tmdb-id/--season/--type tv/--variety`,只去掉 `--dry-run`。
 
-`ingest-folder` 同理,用户确认后只去掉 `--dry-run`;不要换回 `ingest`。
+`ingest-folder` 和 `scrape-folder` 同理,用户确认后只去掉 `--dry-run`;不要在不同命令之间来回切换。
 
 ### 5. 报告结果
 
@@ -248,9 +304,10 @@ panbox ingest <URL> --hint "<同样的 hint>" --yes --json
 目标:{path}
 新增 {len(added)} 集/个文件
 跳过 {len(skipped)} 项(库里已有)
+元数据 created/exists/error 数量
 ```
 
-如果 `added` 是空且 `status=skipped` → 说明库里已经有完整版了,如实告知。
+如果 `added` 是空但 `metadata` 有 `created` 或 `would_create`,说明本轮是在补刮削,不要误报“什么都没做”。如果 `added` 是空且 `status=skipped`、`metadata` 也为空 → 说明库里已经有完整版且没有触发补元数据,如实告知。
 
 ## 各云盘注意事项
 

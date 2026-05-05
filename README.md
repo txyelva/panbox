@@ -198,6 +198,15 @@ panbox ingest-folder "/待刮削/剧集/某节目" \
   --rename-plan rename-plan.json \
   --dry-run \
   --json
+
+# 已经入库/手动放好的目录只补 NFO、海报、fanart、每集 NFO/thumb,不移动视频
+panbox scrape-folder "/影视剧/Variety/开始推理吧 (2022)" \
+  --cloud 115 \
+  --tmdb-id 203003 \
+  --season 1 \
+  --type tv \
+  --dry-run \
+  --json
 ```
 
 **URL 格式与密码参数**：
@@ -232,6 +241,20 @@ panbox ingest-folder "/待刮削/剧集/某节目" \
 ```
 
 如果同一文件夹里有重名文件,计划项可以用 `fid` 精确指定。`target` 只能是文件名,不能带路径。
+
+### 可恢复工作流
+
+panbox 不再只支持“从分享链接一路成功到底”的单一路径。遇到限流、转存已完成、用户手动移动、或已入库但缺元数据时,按当前状态接着做:
+
+| 当前状态 | 用法 |
+|---|---|
+| 还在分享链接里,未转存 | `panbox ingest <URL> ...` |
+| 已转存到待刮削/临时目录,还没归库 | `panbox ingest-folder "<目录>" --cloud <云盘> ...` |
+| 文件名太乱,需要先改名再处理 | 给 `ingest` / `ingest-folder` / `scrape-folder` 加 `--rename-plan rename-plan.json` |
+| 已经在媒体库或用户手动放好,只缺 NFO/海报/缩略图 | `panbox scrape-folder "<目录>" --cloud <云盘> ...` |
+| 只想验证 TMDB 识别 | `panbox identify --name/--file ...` |
+
+`scrape-folder` 是元数据补救命令:它会原地扫描目录中的视频,写 `tvshow.nfo` 或电影 NFO、`poster.jpg`、`fanart.jpg`,并给 TV 每集写同名 `.nfo` 和 `-thumb.jpg`。默认只补缺失文件;加 `--force` 才会覆盖已经存在的 NFO/图片。
 
 ### 综艺严格模式
 
