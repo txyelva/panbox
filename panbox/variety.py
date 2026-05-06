@@ -132,6 +132,7 @@ def score_file_for_episode(
     file_date = parse_date(file.name)
     file_season, file_episode = extract_sxex(file.name)
     file_period, file_part = extract_period_part(file.name)
+    explicit_episode_match = file_episode is not None and file_episode == episode.number
 
     if any(k in name and k not in ep_name for k in _NEGATIVE_KEYWORDS):
         return None
@@ -145,20 +146,21 @@ def score_file_for_episode(
     date_delta: Optional[int] = None
     if file_date and episode.air_date:
         date_delta = abs((file_date - episode.air_date).days)
-        if date_delta > 1:
+        if date_delta > 1 and not explicit_episode_match:
             return None
 
     if (
         file_period is not None
         and episode.period is not None
         and file_period != episode.period
+        and not explicit_episode_match
     ):
         return None
 
-    if file_part and episode.part and file_part != episode.part:
+    if file_part and episode.part and file_part != episode.part and not explicit_episode_match:
         return None
 
-    if date_delta == 1:
+    if date_delta == 1 and not explicit_episode_match:
         if file_period is None or episode.period is None or file_period != episode.period:
             return None
         if episode.part and file_part != episode.part:

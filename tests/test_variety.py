@@ -112,6 +112,32 @@ class VarietyMatcherTest(unittest.TestCase):
             ],
         )
 
+    def test_explicit_sxex_wins_over_generic_episode_text(self) -> None:
+        episodes = build_variety_episodes(
+            {
+                "season_number": 2,
+                "episodes": [
+                    {"episode_number": 1, "name": "第1期上：惊夜推乐门", "air_date": "2024-05-02"},
+                    {"episode_number": 2, "name": "第1期下：惊夜推乐门", "air_date": "2024-05-02"},
+                    {"episode_number": 3, "name": "第2期上：神秘推老汇", "air_date": "2024-05-09"},
+                ],
+            }
+        )
+        files = [
+            video("2", "开始推理吧.S02E02.第2集.2024.WEB-DL.2160p.H265.DDP.ADWeb.mkv"),
+            video("3", "开始推理吧.S02E03.第3集.2024.WEB-DL.2160p.H265.DDP.ADWeb.mkv"),
+        ]
+
+        matches = match_variety_files(files, episodes)
+
+        self.assertEqual(
+            [(m.episode.number, m.file.name, m.reasons[0]) for m in matches],
+            [
+                (2, "开始推理吧.S02E02.第2集.2024.WEB-DL.2160p.H265.DDP.ADWeb.mkv", "sxex"),
+                (3, "开始推理吧.S02E03.第3集.2024.WEB-DL.2160p.H265.DDP.ADWeb.mkv", "sxex"),
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
