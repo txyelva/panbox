@@ -12,6 +12,8 @@ from panbox.pipeline import (
     _ensure_staging_season_match,
     _finalize_tv,
     _apply_rename_rules,
+    _collect_existing_staging_items_by_name,
+    _pick_query,
     _plan_tv_targets,
     scrape_folder,
     _tmdb_says_variety,
@@ -212,6 +214,36 @@ class PipelineTest(unittest.TestCase):
 
         self.assertEqual(added, ["Show - S01E03.mp4"])
         self.assertEqual(skipped, [])
+
+    def test_tv_season_hint_ignores_season_release_year_for_search(self) -> None:
+        pick = _pick_query([], "黑袍纠察队 第五季(2026)", "tv")
+
+        self.assertEqual(pick.query, "黑袍纠察队")
+        self.assertEqual(pick.season, 5)
+        self.assertIsNone(pick.year)
+
+    def test_existing_staging_items_can_be_reused_for_duplicate_115_receive(self) -> None:
+        cloud = FakeCloud()
+        staging_fid = cloud.mkdir_p("/staging")
+        show_fid = cloud.mkdir_p("/staging/The Boys S05")
+        cloud.children[show_fid].append(
+            RemoteFile(
+                fid="video1",
+                name="The.Boys.S05E01.mkv",
+                is_dir=False,
+                size=123,
+                parent_fid=show_fid,
+            )
+        )
+        share_videos = [
+            RemoteFile(fid="share1", name="The.Boys.S05E01.mkv", is_dir=False, size=123)
+        ]
+
+        staged = _collect_existing_staging_items_by_name(
+            cloud, staging_fid, {"The Boys S05"}, share_videos
+        )
+
+        self.assertEqual([v.name for v, _ in staged], ["The.Boys.S05E01.mkv"])
 
     def test_scrape_folder_backfills_existing_tv_metadata(self) -> None:
         cfg = Config(tmdb=TMDBConfig(api_key="test"))

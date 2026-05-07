@@ -347,9 +347,12 @@ def _pick_query(
             elif videos:
                 gm = Guess.from_text(videos[0].name).media_type
                 mt = gm
+        # TV 条目年份是 series 首播年。用户写在季度 hint 里的年份常是本季年份
+        # (例如 "第五季(2026)"),不能拿它限制 TMDB TV 搜索。
+        year = None if mt == "tv" and season is not None else hp.year
         return QueryPick(
             query=hp.title or (videos[0].name if videos else ""),
-            year=hp.year,
+            year=year,
             season=season,
             media_type=mt,
         )
@@ -393,6 +396,45 @@ def _collect_videos_in_parent(
         elif c.is_video:
             out.append((c, None))
     return out
+
+
+def _filter_staged_videos_to_share(
+    staged: list[tuple[RemoteFile, Optional[int]]],
+    share_videos: list[RemoteFile],
+) -> list[tuple[RemoteFile, Optional[int]]]:
+    """Keep only videos that look like the current share.
+
+    Used for 115 duplicate receives: the API may say the share was already
+    received and return no new fids, so we locate the existing top-level item
+    in staging by name and then trim it back to this share's video names/sizes.
+    """
+    names = {f.name for f in share_videos}
+    name_sizes = {(f.name, f.size) for f in share_videos if f.size}
+    out: list[tuple[RemoteFile, Optional[int]]] = []
+    for video, folder_season in staged:
+        if name_sizes and (video.name, video.size) in name_sizes:
+            out.append((video, folder_season))
+        elif video.name in names:
+            out.append((video, folder_season))
+    return out
+
+
+def _collect_existing_staging_items_by_name(
+    qc: Cloud,
+    staging_fid: str,
+    top_names: set[str],
+    share_videos: list[RemoteFile],
+) -> list[tuple[RemoteFile, Optional[int]]]:
+    if not top_names:
+        return []
+    existing_top_fids = {
+        f.fid for f in qc.list_dir(staging_fid)
+        if f.name in top_names
+    }
+    if not existing_top_fids:
+        return []
+    staged = _collect_videos_in_parent(qc, staging_fid, existing_top_fids)
+    return _filter_staged_videos_to_share(staged, share_videos)
 
 
 def ingest(
@@ -578,11 +620,11 @@ def ingest(
             skipped_names = [
                 f.name for f in share_videos if f.fid not in {m.file.fid for m in variety_matches}
             ][:50]
-        elif rename_rules and chosen.media_type == "tv":
+        elif chosen.media_type == "tv":
             planned, skipped_names = _plan_tv_targets(
                 layout, [(f, None) for f in share_videos], season_hint
             )
-        elif rename_rules and chosen.media_type == "movie":
+        elif chosen.media_type == "movie":
             planned = [
                 layout.movie_filename(f.ext, part=(i + 1) if len(share_videos) > 1 else None)
                 for i, f in enumerate(share_videos)
@@ -622,10 +664,13 @@ def ingest(
     token_list = [x.fid_token or "" for x in save_items]
     # 源分享里所有视频数(递归),用于确认 copy 完成
     all_share = qc.list_share_recursive(pwd_id, stoken, "0")
+    all_share_videos = [f for f in all_share if f.is_video]
+    fallback_share_videos = [m.file for m in variety_matches] if variety_matches else all_share_videos
+    fallback_top_names = {x.name for x in save_items}
     expected_video_count = (
         len(variety_matches)
         if variety_matches
-        else sum(1 for f in all_share if f.is_video)
+        else len(all_share_videos)
     )
 
     # 115 等不返回新 fid 的云盘:先拍快照,copy 后扫新增
@@ -667,12 +712,16 @@ def ingest(
     else:
         # 115/百度等:扫 staging 里快照之后新增的顶层条目
         while True:
-            new_fids = {
-                f.fid for f in qc.list_dir(staging_fid)
-                if f.fid not in staging_snapshot
-            }
+            staging_children = qc.list_dir(staging_fid)
+            new_fids = {f.fid for f in staging_children if f.fid not in staging_snapshot}
             if new_fids:
                 staged_videos = _collect_videos_in_parent(qc, staging_fid, new_fids)
+            else:
+                # 115 对重复接收同一分享会返回“已接收”且没有新 fid。
+                # 此时快照差为空,需要复用 staging 中同名的既有顶层条目。
+                staged_videos = _collect_existing_staging_items_by_name(
+                    qc, staging_fid, fallback_top_names, fallback_share_videos
+                )
             if len(staged_videos) >= expected_video_count:
                 break
             if time.time() >= deadline:
