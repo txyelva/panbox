@@ -258,6 +258,8 @@ panbox 不再只支持“从分享链接一路成功到底”的单一路径。�
 
 `scrape-folder` 是元数据补救命令:它会原地扫描目录中的视频,写 `tvshow.nfo` 或电影 NFO、`poster.jpg`、`fanart.jpg`,并给 TV 每集写同名 `.nfo` 和 `-thumb.jpg`。默认只补缺失文件;加 `--force` 才会覆盖已经存在的 NFO/图片。
 
+JSON 结果里的 `skipped` 会保留文件名列表,同时 `skipped_details` 会给出结构化跳过原因。Agent 集成应以 `skipped_details.reason` 为准,例如 `existing_episode` 表示库里已有对应集数,`unparsed_episode` 才表示无法解析集数。
+
 ### 综艺严格模式
 
 综艺分享经常混入正片、加更、会员版、花絮、彩蛋、纯享、直播、训练室、发布会等内容。`--variety` 会先读取指定 TMDB season 的 episode 列表，再按 `S01E01`、日期、期数/集数、上中下、标题关键词反向匹配网盘文件，只入库匹配到 TMDB 正集的文件。若文件日期与 TMDB 播出日期只差 1 天，则必须同时匹配期数/上下，避免上传日期偏移漏集。

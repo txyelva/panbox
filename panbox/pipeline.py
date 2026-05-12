@@ -37,6 +37,7 @@ class IngestResult:
     path: Optional[str] = None
     added: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    skipped_details: list[dict] = field(default_factory=list)
     candidates: list[dict] = field(default_factory=list)
     planned: list[dict] = field(default_factory=list)
     renamed: list[dict] = field(default_factory=list)
@@ -65,6 +66,12 @@ class ScrapeVideo:
     folder_season: Optional[int]
     parent_fid: str
     parent_path: str
+
+
+def _skip_detail(name: str, reason: str, **extra: Any) -> dict:
+    row = {"name": name, "reason": reason}
+    row.update({k: v for k, v in extra.items() if v is not None})
+    return row
 
 
 def _tmdb_says_variety(details: dict[str, Any]) -> bool:
@@ -301,10 +308,11 @@ def _plan_tv_targets(
     layout: Layout,
     staged: list[tuple[RemoteFile, Optional[int]]],
     season_hint: Optional[int],
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[dict]]:
     has_multi_folder_season = len({fs for _, fs in staged if fs is not None}) > 1
     added: list[str] = []
     skipped: list[str] = []
+    skipped_details: list[dict] = []
     for v, folder_season in staged:
         g = Guess.from_text(v.name)
         season_num = g.season if g.season is not None else folder_season
@@ -313,10 +321,12 @@ def _plan_tv_targets(
         episode = g.episode
         if episode is None:
             skipped.append(v.name)
+            skipped_details.append(_skip_detail(v.name, "unparsed_episode"))
             continue
         if season_num is None:
             if has_multi_folder_season:
                 skipped.append(v.name)
+                skipped_details.append(_skip_detail(v.name, "missing_season"))
                 continue
             season_num = 1
         ep_list = episode if isinstance(episode, list) else [episode]
@@ -324,9 +334,10 @@ def _plan_tv_targets(
             ep_ints = [int(e) for e in ep_list]
         except (TypeError, ValueError):
             skipped.append(v.name)
+            skipped_details.append(_skip_detail(v.name, "invalid_episode"))
             continue
         added.append(layout.tv_filename(int(season_num), ep_ints, v.ext))
-    return added, skipped
+    return added, skipped, skipped_details
 
 
 def _pick_query(
@@ -599,6 +610,10 @@ def ingest(
                 year=chosen.year,
                 message=f"综艺严格匹配未找到可入库正片 season={season_hint}",
                 skipped=[f.name for f in share_videos[:50]],
+                skipped_details=[
+                    _skip_detail(f.name, "variety_unmatched", season=season_hint)
+                    for f in share_videos[:50]
+                ],
                 renamed=renamed_rows,
             )
 
@@ -606,6 +621,7 @@ def ingest(
         planned = []
         plan_rows = []
         skipped_names: list[str] = []
+        skipped_details: list[dict] = []
         if variety_matches and season_hint is not None:
             for m in variety_matches:
                 target = layout.tv_filename(season_hint, m.episode.number, m.file.ext)
@@ -620,8 +636,12 @@ def ingest(
             skipped_names = [
                 f.name for f in share_videos if f.fid not in {m.file.fid for m in variety_matches}
             ][:50]
+            skipped_details = [
+                _skip_detail(f.name, "variety_unmatched", season=season_hint)
+                for f in share_videos if f.fid not in {m.file.fid for m in variety_matches}
+            ][:50]
         elif chosen.media_type == "tv":
-            planned, skipped_names = _plan_tv_targets(
+            planned, skipped_names, skipped_details = _plan_tv_targets(
                 layout, [(f, None) for f in share_videos], season_hint
             )
         elif chosen.media_type == "movie":
@@ -644,6 +664,7 @@ def ingest(
             planned=plan_rows,
             renamed=renamed_rows,
             skipped=skipped_names,
+            skipped_details=skipped_details,
             message=(
                 f"dry_run — cloud={cloud_name} query='{query}' season={season_hint} "
                 f"variety={variety} matched={len(variety_matches)} 未执行转存"
@@ -936,12 +957,17 @@ def ingest_folder(
                 renamed=renamed_rows,
                 message=f"综艺严格匹配未找到可入库正片 season={season_hint}",
                 skipped=[v.name for v in videos[:50]],
+                skipped_details=[
+                    _skip_detail(v.name, "variety_unmatched", season=season_hint)
+                    for v in videos[:50]
+                ],
             )
 
     if dry_run:
         planned: list[dict] = []
         added: list[str] = []
         skipped: list[str] = []
+        skipped_details: list[dict] = []
         if chosen.media_type == "movie":
             added = [
                 layout.movie_filename(v.ext, part=(i + 1) if len(videos) > 1 else None)
@@ -960,8 +986,14 @@ def ingest_folder(
                 })
             matched_fids = {m.file.fid for m in variety_matches}
             skipped = [v.name for v in videos if v.fid not in matched_fids][:50]
+            skipped_details = [
+                _skip_detail(v.name, "variety_unmatched", season=season_hint)
+                for v in videos if v.fid not in matched_fids
+            ][:50]
         else:
-            added, skipped = _plan_tv_targets(layout, staged_videos, season_hint)
+            added, skipped, skipped_details = _plan_tv_targets(
+                layout, staged_videos, season_hint
+            )
 
         return IngestResult(
             status="ok",
@@ -976,6 +1008,7 @@ def ingest_folder(
             ),
             added=added,
             skipped=skipped,
+            skipped_details=skipped_details,
             planned=planned,
             renamed=renamed_rows,
             message=(
@@ -1137,6 +1170,7 @@ def scrape_folder(
     layout = Layout(title=chosen.title, year=chosen.year, media_type=chosen.media_type)
     metadata_rows: list[dict] = []
     skipped: list[str] = []
+    skipped_details: list[dict] = []
 
     root_path = folder_path.rstrip("/") or "/"
     if chosen.media_type == "movie":
@@ -1165,6 +1199,7 @@ def scrape_folder(
             year=chosen.year,
             path=root_path,
             skipped=skipped,
+            skipped_details=skipped_details,
             renamed=renamed_rows,
             metadata=metadata_rows,
             message=f"{'dry_run — ' if dry_run else ''}metadata-only cloud={cloud_name} folder='{folder_path}'",
@@ -1213,6 +1248,9 @@ def scrape_folder(
         if variety:
             if season_hint is None or sv.file.fid not in variety_by_fid:
                 skipped.append(sv.file.name)
+                skipped_details.append(
+                    _skip_detail(sv.file.name, "variety_unmatched", season=season_hint)
+                )
                 continue
             s = int(season_hint)
             ep: Any = variety_by_fid[sv.file.fid]
@@ -1226,10 +1264,19 @@ def scrape_folder(
             ep = g.episode
             if ep is None:
                 skipped.append(sv.file.name)
+                skipped_details.append(
+                    _skip_detail(
+                        sv.file.name,
+                        "unparsed_episode",
+                        season=season_hint if s is None else s,
+                        folder_season=sv.folder_season,
+                    )
+                )
                 continue
             if s is None:
                 if has_multi_folder_season:
                     skipped.append(sv.file.name)
+                    skipped_details.append(_skip_detail(sv.file.name, "missing_season"))
                     continue
                 s = 1
 
@@ -1238,6 +1285,7 @@ def scrape_folder(
             ep_ints = [int(e) for e in ep_list]
         except (TypeError, ValueError):
             skipped.append(sv.file.name)
+            skipped_details.append(_skip_detail(sv.file.name, "invalid_episode", season=s))
             continue
 
         existing = existing_cache.get(sv.parent_fid)
@@ -1268,6 +1316,7 @@ def scrape_folder(
         year=chosen.year,
         path=show_root_path,
         skipped=skipped,
+        skipped_details=skipped_details,
         renamed=renamed_rows,
         metadata=metadata_rows,
         message=f"{'dry_run — ' if dry_run else ''}metadata-only cloud={cloud_name} folder='{folder_path}' season={season_hint} variety={variety}",
@@ -1607,6 +1656,15 @@ def _finalize_movie(
         if cfg.policy.rejected_dir_movies:
             rej_fid = qc.mkdir_p(cfg.policy.rejected_dir_movies)
             qc.move([v.fid for v in videos], rej_fid)
+        skipped_details = [
+            _skip_detail(
+                v.name,
+                "movie_exists",
+                target_dir=target_dir,
+                action="moved_to_rejected" if cfg.policy.rejected_dir_movies else "skipped",
+            )
+            for v in videos
+        ]
         return IngestResult(
             status="skipped",
             type="movie",
@@ -1614,6 +1672,7 @@ def _finalize_movie(
             year=layout.year,
             path=target_dir,
             skipped=[v.name for v in videos],
+            skipped_details=skipped_details,
             message="库里已有,按策略跳过",
         )
 
@@ -1654,7 +1713,7 @@ def _finalize_tv(
 
     # 按 (season, episode) 解析每个 staged 视频
     parsed: list[tuple[int, Any, RemoteFile]] = []  # season, episode(int|list), file
-    orphans: list[RemoteFile] = []
+    skipped_details: list[dict] = []
     variety_by_fid: dict[str, int] = {}
     if variety and tmdb is not None and tmdb_id is not None and season_hint is not None:
         try:
@@ -1668,7 +1727,9 @@ def _finalize_tv(
     for v, folder_season in staged:
         if variety:
             if season_hint is None or v.fid not in variety_by_fid:
-                orphans.append(v)
+                skipped_details.append(
+                    _skip_detail(v.name, "variety_unmatched", season=season_hint)
+                )
                 continue
             parsed.append((int(season_hint), variety_by_fid[v.fid], v))
             continue
@@ -1681,12 +1742,19 @@ def _finalize_tv(
             s = season_hint
         ep = g.episode
         if ep is None:
-            orphans.append(v)
+            skipped_details.append(
+                _skip_detail(
+                    v.name,
+                    "unparsed_episode",
+                    season=season_hint if s is None else s,
+                    folder_season=folder_season,
+                )
+            )
             continue
         if s is None:
             # 多季分享里裸集数归不到 season 就算孤儿,不再默认 1
             if has_multi_folder_season:
-                orphans.append(v)
+                skipped_details.append(_skip_detail(v.name, "missing_season"))
                 continue
             s = 1
         parsed.append((int(s), ep, v))
@@ -1698,11 +1766,12 @@ def _finalize_tv(
             title=layout.title,
             year=layout.year,
             message="无法从文件名解析 SxxExx",
-            skipped=[v.name for v in orphans],
+            skipped=[row["name"] for row in skipped_details],
+            skipped_details=skipped_details,
         )
 
     added: list[str] = []
-    skipped: list[str] = [v.name for v in orphans]
+    skipped: list[str] = [row["name"] for row in skipped_details]
     metadata_rows: list[dict] = []
     seasons = sorted({s for s, _, _ in parsed})
     last_target: str = ""
@@ -1737,10 +1806,26 @@ def _finalize_tv(
                 ep_ints = [int(e) for e in ep_list]
             except (TypeError, ValueError):
                 skipped.append(v.name)
+                skipped_details.append(
+                    _skip_detail(v.name, "invalid_episode", season=s)
+                )
                 continue
 
             if any(e in existing_eps for e in ep_ints):
                 skipped.append(v.name)
+                target_name = layout.tv_filename(s, ep_ints, v.ext)
+                action = "moved_to_rejected" if cfg.policy.rejected_dir_tv else "skipped"
+                skipped_details.append(
+                    _skip_detail(
+                        v.name,
+                        "existing_episode",
+                        season=s,
+                        episodes=ep_ints,
+                        target=target_name,
+                        target_dir=season_dir,
+                        action=action,
+                    )
+                )
                 if cfg.policy.rejected_dir_tv:
                     rej_fid = qc.mkdir_p(cfg.policy.rejected_dir_tv)
                     qc.move([v.fid], rej_fid)
@@ -1775,5 +1860,6 @@ def _finalize_tv(
         path=last_target or layout.tv_show_dir(tv_root),
         added=added,
         skipped=skipped,
+        skipped_details=skipped_details,
         metadata=metadata_rows,
     )

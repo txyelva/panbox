@@ -81,6 +81,7 @@ panbox scrape-folder <网盘内目录路径> \
 | `path` | 最终落地的目录路径 |
 | `added` | 本次入库的文件名列表 |
 | `skipped` | 被跳过(库里已有或解析失败)的文件 |
+| `skipped_details` | 跳过原因明细,每项含 `name/reason`,可能还有 `season/episodes/target/action` |
 | `candidates` | `status=need_confirm` 时的候选 TMDB 结果,含 `tmdb_id/title/year/type/overview` |
 | `planned` | dry-run 计划映射,综艺严格模式下含 `episode/source/target/score/reasons` |
 | `renamed` | dry-run 或执行时的批量重命名映射,含 `source/target/fid` |
@@ -279,6 +280,16 @@ panbox scrape-folder "<目录路径>" --cloud <quark|ali|115|baidu> --tmdb-id <i
 
 如果返回 `metadata`,必须汇总哪些会创建/已存在/失败。`dry-run` 时重点看 `would_create` 和 `would_overwrite`;正式执行后重点看 `created`、`exists`、`error`。
 
+如果返回 `skipped`,必须优先读取 `skipped_details.reason`,绝对不要根据文件名猜原因。常见 reason:
+- `existing_episode`: 目标季集已经在库里,这是正常补缺更新。
+- `unparsed_episode`: 文件名无法解析集数。
+- `missing_season`: 多季资源里无法确定 season。
+- `invalid_episode`: 集数字段异常。
+- `variety_unmatched`: 综艺严格模式下未匹配到 TMDB 正集。
+- `movie_exists`: 电影目录已有视频,按策略跳过。
+
+如果没有 `skipped_details`,只能说“工具未返回跳过原因”,不能自行推断“命名不规范”或“资源有问题”。
+
 **`status: need_confirm`**:把 `candidates` 展示成编号列表,让用户选哪个。选好后把该候选的 `title ({year})` 作为新 hint 重跑(可加 `--yes` 跳过二次候选)。
 
 **`status: error`**:展示 `message`,常见原因:
@@ -311,6 +322,7 @@ panbox ingest <URL> --hint "<同样的 hint>" --yes --json
 ```
 
 如果 `added` 是空但 `metadata` 有 `created` 或 `would_create`,说明本轮是在补刮削,不要误报“什么都没做”。如果 `added` 是空且 `status=skipped`、`metadata` 也为空 → 说明库里已经有完整版且没有触发补元数据,如实告知。
+如果跳过项的 `reason=existing_episode`,要说“库里已有对应集数”,不要说“命名不规范”。
 
 ## 各云盘注意事项
 

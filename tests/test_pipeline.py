@@ -176,6 +176,29 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(result.path, "/Variety/奔跑吧 (2014)/Season 14")
         self.assertEqual(result.added, ["奔跑吧 - S14E01.mp4"])
 
+    def test_finalize_tv_reports_existing_episode_skip_reason(self) -> None:
+        cfg = Config(tmdb=TMDBConfig(api_key="test"))
+        cloud_cfg = SimpleNamespace(library_tv="/TV", rejected_dir_tv="")
+        layout = Layout(title="Show", year="2024", media_type="tv")
+        cloud = FakeCloud()
+        cloud.mkdir_p("/TV/Show (2024)")
+        season_fid = cloud.mkdir_p("/TV/Show (2024)/Season 01")
+        cloud.children[season_fid].append(
+            RemoteFile(fid="existing1", name="Show - S01E01.mkv", is_dir=False)
+        )
+        staged = [
+            (RemoteFile(fid="video1", name="01 4K.mp4", is_dir=False), None),
+        ]
+
+        result = _finalize_tv(
+            cloud, cfg, cloud_cfg, layout, staged, season_hint=1
+        )
+
+        self.assertEqual(result.added, [])
+        self.assertEqual(result.skipped, ["01 4K.mp4"])
+        self.assertEqual(result.skipped_details[0]["reason"], "existing_episode")
+        self.assertEqual(result.skipped_details[0]["episodes"], [1])
+
     def test_tmdb_variety_detection_uses_type_or_genre(self) -> None:
         self.assertTrue(_tmdb_says_variety({"type": "Reality", "genres": []}))
         self.assertTrue(_tmdb_says_variety({"genres": [{"id": 10764, "name": "真人秀"}]}))
@@ -210,10 +233,27 @@ class PipelineTest(unittest.TestCase):
             (RemoteFile(fid="v1", name="Show - S01E03.mp4", is_dir=False), None),
         ]
 
-        added, skipped = _plan_tv_targets(layout, staged, season_hint=None)
+        added, skipped, skipped_details = _plan_tv_targets(
+            layout, staged, season_hint=None
+        )
 
         self.assertEqual(added, ["Show - S01E03.mp4"])
         self.assertEqual(skipped, [])
+        self.assertEqual(skipped_details, [])
+
+    def test_plan_tv_targets_reports_unparsed_episode_reason(self) -> None:
+        layout = Layout(title="Show", year="2026", media_type="tv")
+        staged = [
+            (RemoteFile(fid="v1", name="bonus.clip.mp4", is_dir=False), None),
+        ]
+
+        added, skipped, skipped_details = _plan_tv_targets(
+            layout, staged, season_hint=1
+        )
+
+        self.assertEqual(added, [])
+        self.assertEqual(skipped, ["bonus.clip.mp4"])
+        self.assertEqual(skipped_details[0]["reason"], "unparsed_episode")
 
     def test_tv_season_hint_ignores_season_release_year_for_search(self) -> None:
         pick = _pick_query([], "黑袍纠察队 第五季(2026)", "tv")

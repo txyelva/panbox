@@ -46,6 +46,14 @@ def _print_metadata_summary(rows: list[dict]) -> None:
     parts = [f"{key}={counts[key]}" for key in order if counts.get(key)]
     console.print(f"[cyan]元数据 {len(rows)}[/cyan]: " + ", ".join(parts))
 
+
+def _print_skip_summary(rows: list[dict]) -> None:
+    if not rows:
+        return
+    counts = Counter(str(row.get("reason", "unknown")) for row in rows)
+    parts = [f"{reason}={count}" for reason, count in sorted(counts.items())]
+    console.print(f"[yellow]跳过原因[/yellow]: " + ", ".join(parts))
+
 EXAMPLE_CONFIG = """\
 tmdb:
   api_key: ""
@@ -285,6 +293,7 @@ def ingest(
             )
         console.print(table)
     _print_metadata_summary(result.metadata)
+    _print_skip_summary(result.skipped_details)
     if result.skipped:
         console.print(f"[yellow]跳过 {len(result.skipped)}[/yellow]: " + ", ".join(result.skipped))
     if result.candidates:
@@ -378,6 +387,7 @@ def ingest_folder(
             )
         console.print(table)
     _print_metadata_summary(result.metadata)
+    _print_skip_summary(result.skipped_details)
     if result.skipped:
         console.print(f"[yellow]跳过 {len(result.skipped)}[/yellow]: " + ", ".join(result.skipped))
     if result.candidates:
@@ -456,6 +466,7 @@ def scrape_folder(
             table.add_row(str(row.get("source", "")), str(row.get("target", "")))
         console.print(table)
     _print_metadata_summary(result.metadata)
+    _print_skip_summary(result.skipped_details)
     if result.skipped:
         console.print(f"[yellow]跳过 {len(result.skipped)}[/yellow]: " + ", ".join(result.skipped))
     if result.candidates:
