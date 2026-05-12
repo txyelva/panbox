@@ -23,6 +23,7 @@ requires: panbox CLI (https://github.com/txyelva/panbox)
   - 115:`https://115.com/s/...` 或 `https://115cdn.com/s/...`
   - 百度网盘:`https://pan.baidu.com/s/...`
 - 用户明确说「帮我入库」「刮削一下」「转存并归档」「这个剧加到库里」之类
+- 用户只说「更新某剧」「收录某电影/电视剧/综艺」但没有给网盘链接 → 先用 `panbox search` 找候选资源,让用户选择
 - 用户说「看看这个链接」并带网盘链接 → 通常也是入库意图,先问一句确认
 
 **不适用**:单纯问链接内容是什么、或只想本地下载。
@@ -66,6 +67,14 @@ panbox scrape-folder <网盘内目录路径> \
     [--yes] \
     [--dry-run] \
     --json
+
+panbox search <片名或剧名> \
+    [--cloud 115|ali|aliyun|quark|baidu]... \
+    [--limit 8] \
+    [--base-url https://so.252035.xyz] \
+    [--refresh] \
+    [--check-links] \
+    --json
 ```
 
 **必须加 `--json`**,拿结构化结果再向用户汇报。不要解析人类输出。
@@ -88,10 +97,24 @@ panbox scrape-folder <网盘内目录路径> \
 | `metadata` | 元数据补写结果,含 `kind/name/path/status/message`;`status` 可能是 `created` / `exists` / `would_create` / `would_overwrite` / `overwritten` / `error` |
 | `message` | 补充说明或错误信息 |
 
+`panbox search` 返回 JSON 字段:
+
+| 字段 | 含义 |
+|---|---|
+| `status` | `ok` / `error` |
+| `query` | 搜索关键词 |
+| `base_url` | 使用的 PanSou API 地址,默认 `https://so.252035.xyz` |
+| `total` | PanSou 返回的候选总数 |
+| `cloud_types` | 本次搜索限制的网盘类型 |
+| `candidates` | 候选资源数组,每项含 `index/cloud/panbox_cloud/url/password/note/datetime/source/score/signals/check_state/check_summary` |
+
+`score/signals` 只用于排序和人工判断,不要当作入库成功依据。真正能否入库,必须在用户选候选后继续跑 `panbox ingest ... --dry-run --json`。
+
 ## 可恢复工作流:分享、已转存、已入库
 
 panbox 的核心原则是按“当前真实状态”继续,不要为了回到理想入口而删除重来:
 
+- 用户只说要更新/收录,但没有链接 → `panbox search "<片名或剧名>" --json`,展示候选给用户选
 - 还在分享链接里,未转存 → `panbox ingest <URL> ...`
 - 已经转存到自己网盘的临时目录,还没归库 → `panbox ingest-folder "<目录路径>" --cloud <云盘> ...`
 - 已经在媒体库或用户手动放好,只缺 NFO/海报/缩略图 → `panbox scrape-folder "<目录路径>" --cloud <云盘> ...`
@@ -215,6 +238,38 @@ panbox ingest "https://www.alipan.com/s/QZF6jNbfX55" \
 - 如果用户明确选择单独的 `乘风2026` 条目 → 用该条目的 TMDB ID 和 `--season 1`
 
 ## 标准流程
+
+### 0. 用户没有给链接时先搜资源
+
+如果用户只说“更新/收录某剧、电影、综艺”,但没有贴夸克/阿里/115/百度分享链接,不要编造链接,也不要直接说做不了。先搜 PanSou:
+
+```bash
+panbox search "<用户说的片名或剧名>" --json
+```
+
+需要限定网盘时:
+
+```bash
+panbox search "<片名>" --cloud 115 --cloud quark --limit 8 --json
+```
+
+把 `candidates` 展示给用户确认,至少展示:
+
+- `index`
+- `cloud`
+- `note`
+- `datetime`
+- `source`
+- `score/signals`
+- `url` 和 `password`
+
+用户选定候选后,再用该候选的 `url` 进入原来的 dry-run 流程:
+
+```bash
+panbox ingest "<候选 url>" --hint "<用户原始片名或剧名>" --yes --dry-run --json
+```
+
+若候选有 `password` 但 URL 里没有密码参数,补 `--passcode <password>`。`panbox search --check-links` 是可选项;当前公共站可能不开放检测接口,若 `check_state=unavailable`,只说明检测不可用,不能据此判定资源失效。
 
 ### 1. 提取 URL 和 hint
 

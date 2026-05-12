@@ -12,6 +12,7 @@ from rich.table import Table
 from .clouds import parse_share_url as cloud_parse_share_url
 from .config import Config, DEFAULT_CONFIG_PATH
 from .matcher import Guess, normalize_query
+from .pansou import PansouClient, PansouConfig, PansouError
 from .pipeline import ingest as _ingest
 from .pipeline import ingest_folder as _ingest_folder
 from .pipeline import scrape_folder as _scrape_folder
@@ -53,6 +54,20 @@ def _print_skip_summary(rows: list[dict]) -> None:
     counts = Counter(str(row.get("reason", "unknown")) for row in rows)
     parts = [f"{reason}={count}" for reason, count in sorted(counts.items())]
     console.print(f"[yellow]跳过原因[/yellow]: " + ", ".join(parts))
+
+
+def _load_pansou_config() -> PansouConfig:
+    try:
+        return Config.load().pansou
+    except Exception:
+        return PansouConfig()
+
+
+def _short(text: str, width: int = 52) -> str:
+    if len(text) <= width:
+        return text
+    return text[: max(0, width - 1)] + "…"
+
 
 EXAMPLE_CONFIG = """\
 tmdb:
@@ -97,6 +112,15 @@ policy:
   rejected_dir_tv:     /待刮削/_rejected/tv
   ask_when_ambiguous: true
   write_metadata: true
+
+pansou:
+  # 默认使用官方公共 PanSou；如需本地部署,改成 http://127.0.0.1:8888
+  base_url: https://so.252035.xyz
+  fallback_url: ""
+  use_public_fallback: false
+  cloud_types: ["115", "aliyun", "quark", "baidu"]
+  max_results: 8
+  timeout: 30
 """
 
 
@@ -198,6 +222,80 @@ def identify(
             f"{r.popularity:.1f}",
         )
     console.print(table)
+
+
+@main.command("search")
+@click.argument("query")
+@click.option("--cloud", "cloud_types", multiple=True, type=click.Choice(["115", "ali", "aliyun", "quark", "baidu"]), help="限制网盘类型,可重复")
+@click.option("--limit", type=int, help="最多返回多少候选")
+@click.option("--base-url", help="PanSou API 地址,默认读取配置或 https://so.252035.xyz")
+@click.option("--refresh", is_flag=True, help="强制刷新 PanSou 缓存")
+@click.option("--check-links", is_flag=True, help="调用 /api/check/links 检测候选链接是否有效")
+@click.option("--json", "as_json", is_flag=True)
+def search(
+    query: str,
+    cloud_types: tuple[str, ...],
+    limit: int | None,
+    base_url: str | None,
+    refresh: bool,
+    check_links: bool,
+    as_json: bool,
+) -> None:
+    """用 PanSou 搜索可入库网盘资源,只返回候选,不转存。"""
+    cfg = _load_pansou_config()
+    client = PansouClient(cfg, base_url=base_url)
+    try:
+        result = client.search(
+            query,
+            cloud_types=cloud_types or None,
+            max_results=limit,
+            refresh=refresh,
+            check_links=check_links,
+        )
+    except (PansouError, ValueError) as e:
+        if as_json:
+            click.echo(json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False))
+        else:
+            console.print(f"[red]PanSou 搜索失败:[/red] {e}")
+        sys.exit(1)
+
+    payload = _asdict(result)
+    payload["candidates"] = [
+        {"index": i, **row}
+        for i, row in enumerate(payload.get("candidates") or [], 1)
+    ]
+    if as_json:
+        click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    console.print(
+        f"[bold]PanSou[/bold] {result.base_url}  query={result.query}  total={result.total}"
+    )
+    if not result.candidates:
+        console.print("[yellow]未找到候选资源[/yellow]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("#")
+    table.add_column("分")
+    table.add_column("云盘")
+    table.add_column("检测")
+    table.add_column("说明")
+    table.add_column("时间")
+    table.add_column("来源")
+    table.add_column("URL")
+    for i, row in enumerate(result.candidates, 1):
+        table.add_row(
+            str(i),
+            str(row.score),
+            row.cloud,
+            row.check_state or "-",
+            _short(row.note),
+            row.datetime[:10] if row.datetime else "-",
+            row.source,
+            row.url,
+        )
+    console.print(table)
+    console.print("[dim]确认候选后,用对应 URL 继续 panbox ingest --dry-run --json。[/dim]")
 
 
 @main.command()

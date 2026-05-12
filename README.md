@@ -153,9 +153,42 @@ policy:
   write_metadata: true          # 写 NFO + 封面 + 每集缩略图
 ```
 
+### PanSou 资源搜索
+
+用户没有直接提供网盘链接、只说“更新某剧”或“收录某电影”时,panbox 可以先用 PanSou 搜资源,再让用户选择候选链接。默认使用官方公共 API；本地部署时把 `base_url` 改成自己的地址即可。
+
+```yaml
+pansou:
+  base_url: https://so.252035.xyz
+  fallback_url: ""
+  use_public_fallback: false
+  cloud_types: ["115", "aliyun", "quark", "baidu"]
+  max_results: 8
+  timeout: 30
+```
+
 ---
 
 ## 使用
+
+### 搜资源
+
+```bash
+# 用户没给分享链接时,先搜候选资源
+panbox search "爱情没有神话" --json
+
+# 限定网盘和数量
+panbox search "黑袍纠察队 第五季" \
+  --cloud 115 \
+  --cloud quark \
+  --limit 8 \
+  --json
+
+# 可选:尝试检测链接是否有效。公共 API 可能不开放检测接口,此时会标记 unavailable,不影响搜索候选。
+panbox search "爱情没有神话" --cloud quark --check-links --json
+```
+
+`panbox search` 只负责找资源,不会转存、不会入库。返回 JSON 的 `candidates` 每项包含 `index/cloud/panbox_cloud/url/password/note/datetime/source/score/signals`。Agent 应把候选展示给用户确认;用户选定后,再把对应 `url` 交给现有 `panbox ingest ... --dry-run --json` 流程。
 
 ### 入库
 
@@ -250,6 +283,7 @@ panbox 不再只支持“从分享链接一路成功到底”的单一路径。�
 
 | 当前状态 | 用法 |
 |---|---|
+| 用户只说要更新/收录,没有给链接 | `panbox search "<片名或剧名>" --json` |
 | 还在分享链接里,未转存 | `panbox ingest <URL> ...` |
 | 已转存到待刮削/临时目录,还没归库 | `panbox ingest-folder "<目录>" --cloud <云盘> ...` |
 | 文件名太乱,需要先改名再处理 | 给 `ingest` / `ingest-folder` / `scrape-folder` 加 `--rename-plan rename-plan.json` |

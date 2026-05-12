@@ -71,6 +71,16 @@ class PolicyConfig:
 
 
 @dataclass
+class PansouConfig:
+    base_url: str = "https://so.252035.xyz"
+    fallback_url: str = ""
+    use_public_fallback: bool = False
+    cloud_types: list[str] = field(default_factory=lambda: ["115", "aliyun", "quark", "baidu"])
+    max_results: int = 8
+    timeout: int = 30
+
+
+@dataclass
 class Config:
     tmdb: TMDBConfig
     quark: QuarkConfig = field(default_factory=QuarkConfig)
@@ -78,6 +88,7 @@ class Config:
     drive115: Drive115Config = field(default_factory=Drive115Config)
     baidu: BaiduConfig = field(default_factory=BaiduConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
+    pansou: PansouConfig = field(default_factory=PansouConfig)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":
@@ -101,6 +112,7 @@ class Config:
             drive115=Drive115Config(**d115_raw),
             baidu=BaiduConfig(**baidu_raw),
             policy=PolicyConfig(**(raw.get("policy") or {})),
+            pansou=PansouConfig(**(raw.get("pansou") or {})),
         )
         cfg._validate()
         return cfg
