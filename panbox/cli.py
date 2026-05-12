@@ -12,7 +12,7 @@ from rich.table import Table
 from .clouds import parse_share_url as cloud_parse_share_url
 from .config import Config, DEFAULT_CONFIG_PATH
 from .matcher import Guess, normalize_query
-from .pansou import PansouClient, PansouConfig, PansouError
+from .pansou import PansouClient, PansouConfig, PansouError, normalize_api_clouds
 from .pipeline import ingest as _ingest
 from .pipeline import ingest_folder as _ingest_folder
 from .pipeline import scrape_folder as _scrape_folder
@@ -56,11 +56,27 @@ def _print_skip_summary(rows: list[dict]) -> None:
     console.print(f"[yellow]跳过原因[/yellow]: " + ", ".join(parts))
 
 
-def _load_pansou_config() -> PansouConfig:
+def _load_config_for_search() -> Config | None:
     try:
-        return Config.load().pansou
+        return Config.load()
     except Exception:
-        return PansouConfig()
+        return None
+
+
+def _enabled_search_clouds(cfg: Config | None) -> list[str]:
+    if cfg is None:
+        return []
+    enabled = set()
+    if cfg.drive115.cookie:
+        enabled.add("115")
+    if cfg.ali.refresh_token:
+        enabled.add("aliyun")
+    if cfg.quark.cookie:
+        enabled.add("quark")
+    if cfg.baidu.cookie:
+        enabled.add("baidu")
+    preferred = normalize_api_clouds(cfg.pansou.cloud_types)
+    return [cloud for cloud in preferred if cloud in enabled]
 
 
 def _short(text: str, width: int = 52) -> str:
@@ -242,12 +258,27 @@ def search(
     as_json: bool,
 ) -> None:
     """用 PanSou 搜索可入库网盘资源,只返回候选,不转存。"""
-    cfg = _load_pansou_config()
-    client = PansouClient(cfg, base_url=base_url)
+    full_cfg = _load_config_for_search()
+    pansou_cfg = full_cfg.pansou if full_cfg else PansouConfig()
+    if cloud_types:
+        requested_clouds: tuple[str, ...] | list[str] | None = cloud_types
+        cloud_source = "explicit"
+    else:
+        requested_clouds = _enabled_search_clouds(full_cfg)
+        cloud_source = "configured"
+        if not requested_clouds:
+            msg = "未指定 --cloud,且配置里没有已启用的网盘凭据;请先配置云盘或显式传 --cloud。"
+            if as_json:
+                click.echo(json.dumps({"status": "error", "error": msg}, ensure_ascii=False))
+            else:
+                console.print(f"[red]PanSou 搜索失败:[/red] {msg}")
+            sys.exit(1)
+
+    client = PansouClient(pansou_cfg, base_url=base_url)
     try:
         result = client.search(
             query,
-            cloud_types=cloud_types or None,
+            cloud_types=requested_clouds,
             max_results=limit,
             refresh=refresh,
             check_links=check_links,
@@ -260,6 +291,7 @@ def search(
         sys.exit(1)
 
     payload = _asdict(result)
+    payload["cloud_source"] = cloud_source
     payload["candidates"] = [
         {"index": i, **row}
         for i, row in enumerate(payload.get("candidates") or [], 1)
@@ -269,7 +301,7 @@ def search(
         return
 
     console.print(
-        f"[bold]PanSou[/bold] {result.base_url}  query={result.query}  total={result.total}"
+        f"[bold]PanSou[/bold] {result.base_url}  query={result.query}  total={result.total}  clouds={','.join(result.cloud_types)}"
     )
     if not result.candidates:
         console.print("[yellow]未找到候选资源[/yellow]")

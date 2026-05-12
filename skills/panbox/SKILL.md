@@ -110,6 +110,13 @@ panbox search <片名或剧名> \
 
 `score/signals` 只用于排序和人工判断,不要当作入库成功依据。真正能否入库,必须在用户选候选后继续跑 `panbox ingest ... --dry-run --json`。
 
+`panbox search` 的网盘范围规则:
+
+- 用户明确说“找 115/夸克/百度/阿里资源”时,必须加对应 `--cloud`。
+- 用户没有指定网盘时,不要手动补全所有网盘;直接不带 `--cloud`,让 panbox 按配置里已填凭据的网盘自动过滤。
+- 返回 JSON 的 `cloud_source=configured` 表示使用了已配置网盘过滤;`cloud_source=explicit` 表示用户或 agent 显式传了 `--cloud`。
+- 如果返回“未指定 --cloud,且配置里没有已启用的网盘凭据”,要让用户先配置网盘或明确指定要搜哪个网盘。
+
 ## 可恢复工作流:分享、已转存、已入库
 
 panbox 的核心原则是按“当前真实状态”继续,不要为了回到理想入口而删除重来:

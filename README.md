@@ -162,6 +162,7 @@ pansou:
   base_url: https://so.252035.xyz
   fallback_url: ""
   use_public_fallback: false
+  # 用户没显式 --cloud 时,只会在这里的顺序中筛出“已配置凭据”的网盘
   cloud_types: ["115", "aliyun", "quark", "baidu"]
   max_results: 8
   timeout: 30
@@ -189,6 +190,8 @@ panbox search "爱情没有神话" --cloud quark --check-links --json
 ```
 
 `panbox search` 只负责找资源,不会转存、不会入库。返回 JSON 的 `candidates` 每项包含 `index/cloud/panbox_cloud/url/password/note/datetime/source/score/signals`。Agent 应把候选展示给用户确认;用户选定后,再把对应 `url` 交给现有 `panbox ingest ... --dry-run --json` 流程。
+
+默认不指定 `--cloud` 时,搜索范围会自动限制为本机配置里已填凭据的网盘,顺序取自 `pansou.cloud_types`。如果用户明确指定 `--cloud baidu` 或 `--cloud aliyun`,则尊重用户选择,即使该网盘暂未配置凭据。
 
 ### 入库
 

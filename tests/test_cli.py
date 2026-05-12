@@ -88,6 +88,62 @@ class CLITest(unittest.TestCase):
         payload = json.loads(result.output)
         self.assertEqual(payload["candidates"][0]["index"], 1)
         self.assertEqual(payload["candidates"][0]["url"], "https://pan.quark.cn/s/demo")
+        self.assertEqual(payload["cloud_source"], "explicit")
+
+    def test_search_defaults_to_configured_cloud_credentials(self) -> None:
+        cfg = SimpleNamespace(
+            pansou=PansouConfig(
+                base_url="https://example.test",
+                cloud_types=["baidu", "115", "quark", "aliyun"],
+            ),
+            drive115=SimpleNamespace(cookie="UID=1"),
+            ali=SimpleNamespace(refresh_token=""),
+            quark=SimpleNamespace(cookie="QUARK=1"),
+            baidu=SimpleNamespace(cookie=""),
+        )
+
+        class FakePansouClient:
+            def __init__(self, config, base_url=None):
+                self.config = config
+                self.base_url = base_url
+
+            def search(self, query, cloud_types=None, max_results=None, refresh=False, check_links=False):
+                return PansouSearchResult(
+                    status="ok",
+                    query=query,
+                    base_url="https://example.test",
+                    total=0,
+                    cloud_types=list(cloud_types or []),
+                    candidates=[],
+                )
+
+        runner = CliRunner()
+        with patch.object(cli_mod.Config, "load", return_value=cfg), patch.object(
+            cli_mod, "PansouClient", FakePansouClient
+        ):
+            result = runner.invoke(cli_mod.main, ["search", "Demo", "--json"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        payload = json.loads(result.output)
+        self.assertEqual(payload["cloud_types"], ["115", "quark"])
+        self.assertEqual(payload["cloud_source"], "configured")
+
+    def test_search_requires_cloud_when_no_configured_credentials(self) -> None:
+        cfg = SimpleNamespace(
+            pansou=PansouConfig(),
+            drive115=SimpleNamespace(cookie=""),
+            ali=SimpleNamespace(refresh_token=""),
+            quark=SimpleNamespace(cookie=""),
+            baidu=SimpleNamespace(cookie=""),
+        )
+        runner = CliRunner()
+
+        with patch.object(cli_mod.Config, "load", return_value=cfg):
+            result = runner.invoke(cli_mod.main, ["search", "Demo", "--json"])
+
+        self.assertEqual(result.exit_code, 1, result.output)
+        payload = json.loads(result.output)
+        self.assertIn("未指定 --cloud", payload["error"])
 
 
 if __name__ == "__main__":
