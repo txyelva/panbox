@@ -58,13 +58,25 @@ class CLITest(unittest.TestCase):
                 self.config = config
                 self.base_url = base_url
 
-            def search(self, query, cloud_types=None, max_results=None, refresh=False, check_links=False):
+            def search(
+                self,
+                query,
+                cloud_types=None,
+                max_results=None,
+                refresh=False,
+                check_links=False,
+                season=None,
+                media_type=None,
+                tmdb_id=None,
+                variety=False,
+            ):
                 return PansouSearchResult(
                     status="ok",
                     query=query,
                     base_url="https://example.test",
                     total=1,
                     cloud_types=["quark"],
+                    searched_queries=[query],
                     candidates=[
                         PansouCandidate(
                             cloud="quark",
@@ -107,13 +119,25 @@ class CLITest(unittest.TestCase):
                 self.config = config
                 self.base_url = base_url
 
-            def search(self, query, cloud_types=None, max_results=None, refresh=False, check_links=False):
+            def search(
+                self,
+                query,
+                cloud_types=None,
+                max_results=None,
+                refresh=False,
+                check_links=False,
+                season=None,
+                media_type=None,
+                tmdb_id=None,
+                variety=False,
+            ):
                 return PansouSearchResult(
                     status="ok",
                     query=query,
                     base_url="https://example.test",
                     total=0,
                     cloud_types=list(cloud_types or []),
+                    searched_queries=[query],
                     candidates=[],
                 )
 

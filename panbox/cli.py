@@ -243,14 +243,22 @@ def identify(
 @main.command("search")
 @click.argument("query")
 @click.option("--cloud", "cloud_types", multiple=True, type=click.Choice(["115", "ali", "aliyun", "quark", "baidu"]), help="限制网盘类型,可重复")
+@click.option("--type", "media_type", type=click.Choice(["movie", "tv"]), help="后续入库的媒体类型上下文")
+@click.option("--season", type=int, help="后续入库的 TV season,也用于优化盘搜关键词和排序")
+@click.option("--tmdb-id", type=int, help="后续入库应使用的 TMDB ID")
+@click.option("--variety", is_flag=True, help="综艺更新上下文:候选会生成带 --variety 的 dry-run 建议")
 @click.option("--limit", type=int, help="最多返回多少候选")
 @click.option("--base-url", help="PanSou API 地址,默认读取配置或 https://so.252035.xyz")
 @click.option("--refresh", is_flag=True, help="强制刷新 PanSou 缓存")
-@click.option("--check-links", is_flag=True, help="调用 /api/check/links 检测候选链接是否有效")
+@click.option("--check-links", is_flag=True, help="调试项:调用 /api/check/links 检测链接;公共站可能不支持")
 @click.option("--json", "as_json", is_flag=True)
 def search(
     query: str,
     cloud_types: tuple[str, ...],
+    media_type: str | None,
+    season: int | None,
+    tmdb_id: int | None,
+    variety: bool,
     limit: int | None,
     base_url: str | None,
     refresh: bool,
@@ -282,6 +290,10 @@ def search(
             max_results=limit,
             refresh=refresh,
             check_links=check_links,
+            season=season,
+            media_type=media_type,
+            tmdb_id=tmdb_id,
+            variety=variety,
         )
     except (PansouError, ValueError) as e:
         if as_json:

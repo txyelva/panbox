@@ -70,6 +70,10 @@ panbox scrape-folder <网盘内目录路径> \
 
 panbox search <片名或剧名> \
     [--cloud 115|ali|aliyun|quark|baidu]... \
+    [--type movie|tv] \
+    [--season 6] \
+    [--tmdb-id 12345] \
+    [--variety] \
     [--limit 8] \
     [--base-url https://so.252035.xyz] \
     [--refresh] \
@@ -106,9 +110,10 @@ panbox search <片名或剧名> \
 | `base_url` | 使用的 PanSou API 地址,默认 `https://so.252035.xyz` |
 | `total` | PanSou 返回的候选总数 |
 | `cloud_types` | 本次搜索限制的网盘类型 |
-| `candidates` | 候选资源数组,每项含 `index/cloud/panbox_cloud/url/password/note/datetime/source/score/signals/check_state/check_summary` |
+| `searched_queries` | 实际使用的搜索关键词;传 `--season` 时会包含 S06/第六季等变体 |
+| `candidates` | 候选资源数组,每项含 `index/cloud/panbox_cloud/url/password/note/datetime/source/score/signals/check_state/check_summary/suggested_ingest_args` |
 
-`score/signals` 只用于排序和人工判断,不要当作入库成功依据。真正能否入库,必须在用户选候选后继续跑 `panbox ingest ... --dry-run --json`。
+`score/signals` 只用于排序和人工判断,不要当作入库成功依据。真正能否入库,必须在用户选候选后继续跑 `suggested_ingest_args` 对应的 `panbox ingest ... --dry-run --json`。
 
 `panbox search` 的网盘范围规则:
 
@@ -116,6 +121,9 @@ panbox search <片名或剧名> \
 - 用户没有指定网盘时,不要手动补全所有网盘;直接不带 `--cloud`,让 panbox 按配置里已填凭据的网盘自动过滤。
 - 返回 JSON 的 `cloud_source=configured` 表示使用了已配置网盘过滤;`cloud_source=explicit` 表示用户或 agent 显式传了 `--cloud`。
 - 如果返回“未指定 --cloud,且配置里没有已启用的网盘凭据”,要让用户先配置网盘或明确指定要搜哪个网盘。
+- 用户说“更新 S06 / 第六季 / 库里已有 S06”时,必须给 `panbox search` 加 `--type tv --season 6`。
+- 用户说的是综艺,或目标在 Variety 库,或你已经知道该条目是 Reality/真人秀,必须给 `panbox search` 和后续 `ingest` 都带 `--variety`。
+- 不要常规使用 `--check-links`;当前公共站可能不开放检测接口。`check_state=unavailable` 只表示检测接口不可用,绝不表示资源失效。
 
 ## 可恢复工作流:分享、已转存、已入库
 
@@ -260,6 +268,12 @@ panbox search "<用户说的片名或剧名>" --json
 panbox search "<片名>" --cloud 115 --cloud quark --limit 8 --json
 ```
 
+如果用户明确是更新某一季,把 season 上下文放进搜索:
+
+```bash
+panbox search "哈哈哈哈哈 (2020)" --cloud quark --type tv --season 6 --variety --json
+```
+
 把 `candidates` 展示给用户确认,至少展示:
 
 - `index`
@@ -269,11 +283,12 @@ panbox search "<片名>" --cloud 115 --cloud quark --limit 8 --json
 - `source`
 - `score/signals`
 - `url` 和 `password`
+- `suggested_ingest_args` 的关键参数,尤其是 `--season`、`--tmdb-id`、`--variety`
 
-用户选定候选后,再用该候选的 `url` 进入原来的 dry-run 流程:
+用户选定候选后,优先使用候选里的 `suggested_ingest_args` 进入 dry-run 流程:
 
 ```bash
-panbox ingest "<候选 url>" --hint "<用户原始片名或剧名>" --yes --dry-run --json
+panbox ingest "<候选 url>" --hint "<用户原始片名或剧名>" --type tv --season 6 --variety --yes --dry-run --json
 ```
 
 若候选有 `password` 但 URL 里没有密码参数,补 `--passcode <password>`。`panbox search --check-links` 是可选项;当前公共站可能不开放检测接口,若 `check_state=unavailable`,只说明检测不可用,不能据此判定资源失效。

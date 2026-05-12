@@ -182,14 +182,24 @@ panbox search "爱情没有神话" --json
 panbox search "黑袍纠察队 第五季" \
   --cloud 115 \
   --cloud quark \
+  --type tv \
+  --season 5 \
   --limit 8 \
   --json
 
-# 可选:尝试检测链接是否有效。公共 API 可能不开放检测接口,此时会标记 unavailable,不影响搜索候选。
+# 综艺更新:把 season/variety 上下文带进搜索,候选会返回 suggested_ingest_args
+panbox search "哈哈哈哈哈 (2020)" \
+  --cloud quark \
+  --type tv \
+  --season 6 \
+  --variety \
+  --json
+
+# 调试项:尝试检测链接是否有效。公共 API 可能不开放检测接口,此时会标记 unavailable,不影响搜索候选。
 panbox search "爱情没有神话" --cloud quark --check-links --json
 ```
 
-`panbox search` 只负责找资源,不会转存、不会入库。返回 JSON 的 `candidates` 每项包含 `index/cloud/panbox_cloud/url/password/note/datetime/source/score/signals`。Agent 应把候选展示给用户确认;用户选定后,再把对应 `url` 交给现有 `panbox ingest ... --dry-run --json` 流程。
+`panbox search` 只负责找资源,不会转存、不会入库。返回 JSON 的 `candidates` 每项包含 `index/cloud/panbox_cloud/url/password/note/datetime/source/score/signals/suggested_ingest_args`。Agent 应把候选展示给用户确认;用户选定后,优先按 `suggested_ingest_args` 继续 dry-run。
 
 默认不指定 `--cloud` 时,搜索范围会自动限制为本机配置里已填凭据的网盘,顺序取自 `pansou.cloud_types`。如果用户明确指定 `--cloud baidu` 或 `--cloud aliyun`,则尊重用户选择,即使该网盘暂未配置凭据。
 

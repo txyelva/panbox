@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from panbox.config import PansouConfig
-from panbox.pansou import PansouClient, normalize_api_clouds
+from panbox.pansou import PansouClient, build_search_queries, normalize_api_clouds
 
 
 class FakeResponse:
@@ -37,6 +37,18 @@ class FakeSession:
 class PansouTest(unittest.TestCase):
     def test_normalize_cloud_aliases(self) -> None:
         self.assertEqual(normalize_api_clouds(["ali", "115", "aliyun"]), ["aliyun", "115"])
+
+    def test_build_search_queries_adds_season_variants(self) -> None:
+        self.assertEqual(
+            build_search_queries("哈哈哈哈哈 (2020)", season=6),
+            [
+                "哈哈哈哈哈 (2020)",
+                "哈哈哈哈哈 (2020) S06",
+                "哈哈哈哈哈 (2020) S6",
+                "哈哈哈哈哈 (2020) 第6季",
+                "哈哈哈哈哈 (2020) 第六季",
+            ],
+        )
 
     def test_search_ranks_collection_above_single_episode(self) -> None:
         payload = {
@@ -74,6 +86,48 @@ class PansouTest(unittest.TestCase):
         self.assertIn("updated_to:30", result.candidates[0].signals)
         self.assertEqual(session.calls[0]["json"]["cloud_types"], ["115", "quark"])
         self.assertEqual(session.calls[0]["timeout"], 9)
+
+    def test_search_season_context_penalizes_wrong_season_and_suggests_variety_ingest(self) -> None:
+        payload = {
+            "code": 0,
+            "data": {
+                "total": 2,
+                "merged_by_type": {
+                    "quark": [
+                        {
+                            "url": "https://pan.quark.cn/s/s5",
+                            "note": "哈哈哈哈哈 (2020) 第五季 4K",
+                        },
+                        {
+                            "url": "https://pan.quark.cn/s/s6",
+                            "note": "哈哈哈哈哈 (2020) 第六季 4K 更新至第12期",
+                        },
+                    ]
+                },
+            },
+        }
+        session = FakeSession(payload)
+        client = PansouClient(PansouConfig(), session=session)
+
+        result = client.search(
+            "哈哈哈哈哈 (2020)",
+            cloud_types=["quark"],
+            season=6,
+            media_type="tv",
+            tmdb_id=12345,
+            variety=True,
+            max_results=2,
+        )
+
+        self.assertEqual(result.candidates[0].url, "https://pan.quark.cn/s/s6")
+        self.assertIn("season_match:6", result.candidates[0].signals)
+        self.assertIn("season_mismatch:5", result.candidates[1].signals)
+        self.assertEqual(session.calls[0]["json"]["kw"], "哈哈哈哈哈 (2020)")
+        self.assertEqual(session.calls[-1]["json"]["kw"], "哈哈哈哈哈 (2020) 第六季")
+        args = result.candidates[0].suggested_ingest_args
+        self.assertIn("--variety", args)
+        self.assertIn("--tmdb-id", args)
+        self.assertIn("12345", args)
 
     def test_check_links_failure_marks_candidates_unavailable(self) -> None:
         search_payload = {
