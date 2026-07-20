@@ -6,6 +6,7 @@ from typing import Iterable, Optional
 
 from .clouds.base import RemoteFile
 from .matcher import Guess, _cn_to_int
+from .media_tags import extract_media_tags, media_suffix
 
 _SAFE_CHARS = re.compile(r'[\\/:*?"<>|]')
 
@@ -78,10 +79,16 @@ class Layout:
     def movie_dir(self, library_movies: str) -> str:
         return f"{library_movies.rstrip('/')}/{self.folder_name}"
 
-    def movie_filename(self, ext: str, part: Optional[int] = None) -> str:
+    def movie_filename(
+        self,
+        ext: str,
+        part: Optional[int] = None,
+        source_name: str | None = None,
+    ) -> str:
         name = self.folder_name
         if part:
             name = f"{name} - part{part}"
+        name = f"{name}{media_suffix(source_name)}"
         return f"{name}.{ext}"
 
     def tv_show_dir(self, library_tv: str) -> str:
@@ -90,7 +97,13 @@ class Layout:
     def season_dir(self, library_tv: str, season: int) -> str:
         return f"{self.tv_show_dir(library_tv)}/Season {season:02d}"
 
-    def tv_filename(self, season: int, episode: int | list, ext: str) -> str:
+    def tv_filename(
+        self,
+        season: int,
+        episode: int | list,
+        ext: str,
+        source_name: str | None = None,
+    ) -> str:
         title = sanitize(self.title)
         if isinstance(episode, list) and len(episode) > 1:
             tag = f"S{season:02d}E{int(episode[0]):02d}-E{int(episode[-1]):02d}"
@@ -101,7 +114,7 @@ class Layout:
                 tag = f"S{season:02d}Special"
             else:
                 tag = f"S{season:02d}E{int(ep):02d}"
-        return f"{title} - {tag}.{ext}"
+        return f"{title} - {tag}{media_suffix(source_name)}.{ext}"
 
 
 def scan_existing_episodes(files: list[RemoteFile], season: int) -> set[int]:

@@ -174,6 +174,17 @@ panbox 的核心原则是按“当前真实状态”继续,不要为了回到理
 
 绝对不要使用 `~/.openclaw/workspace/scripts/panbox_ingest_with_rename.py`;它是旧方案,会绕过 `--variety`、`library_variety` 和 TMDB Reality 分类逻辑。
 
+## 自动命名会保留媒体标签
+
+panbox 自动落库时,目标文件名会从源文件名中保留高置信度技术标签,例如:
+
+```text
+Scary.Movie.6.2026.2160p.iT.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265.mkv
+→ 惊声尖笑6 (2026) - 2160p WEB-DL DDP5.1 Atmos DV HDR H.265.mkv
+```
+
+会保留的主要是分辨率、来源类型、音频编码/声道/Atmos、DV/HDR/SDR/HLG、视频编码和 bit depth。不要把 dry-run 返回的长目标名手动简化成只有标题和年份;那会丢掉用户关心的媒体信息。也不要自行追加发行组、论坛名、站点名等低置信度信息。
+
 ## 已入库目录补刮削
 
 `scrape-folder` 只处理元数据,不移动视频。适用场景:

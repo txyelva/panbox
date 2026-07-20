@@ -241,6 +241,30 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(skipped, [])
         self.assertEqual(skipped_details, [])
 
+    def test_plan_tv_targets_preserves_media_tags_from_source_name(self) -> None:
+        layout = Layout(title="Show", year="2026", media_type="tv")
+        staged = [
+            (
+                RemoteFile(
+                    fid="v1",
+                    name="Show.S01E03.2160p.WEB-DL.H265.DDP5.1.mkv",
+                    is_dir=False,
+                ),
+                None,
+            ),
+        ]
+
+        added, skipped, skipped_details = _plan_tv_targets(
+            layout, staged, season_hint=None
+        )
+
+        self.assertEqual(
+            added,
+            ["Show - S01E03 - 2160p WEB-DL DDP5.1 H.265.mkv"],
+        )
+        self.assertEqual(skipped, [])
+        self.assertEqual(skipped_details, [])
+
     def test_plan_tv_targets_reports_unparsed_episode_reason(self) -> None:
         layout = Layout(title="Show", year="2026", media_type="tv")
         staged = [

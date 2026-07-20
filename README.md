@@ -270,6 +270,17 @@ panbox scrape-folder "/影视剧/Variety/开始推理吧 (2022)" \
 
 TV 季度标题中的年份通常是该季年份,不是 TMDB 剧集首播年;例如 `黑袍纠察队 第五季(2026)` 应识别到首播年为 2019 的 TV 条目,不应用 2026 限制 TV 搜索。
 
+### 媒体标签保留
+
+自动落库命名会从源文件名里保留高置信度媒体标签,避免把画质、动态范围、音频和编码信息全丢掉。例如:
+
+```text
+Scary.Movie.6.2026.2160p.iT.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265.mkv
+→ 惊声尖笑6 (2026) - 2160p WEB-DL DDP5.1 Atmos DV HDR H.265.mkv
+```
+
+目前保留的主要是:分辨率/4K, WEB-DL/WEBRip/BluRay/REMUX 等来源, DDP/TrueHD/DTS/AAC/FLAC/Atmos 等音频, DV/HDR/HDR10+/SDR/HLG, H.265/H.264/AV1, 以及 10bit/12bit。发行组、无关站点名和片名残片不会保留。
+
 支持两种格式:
 
 ```json

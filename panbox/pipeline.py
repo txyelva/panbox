@@ -336,7 +336,7 @@ def _plan_tv_targets(
             skipped.append(v.name)
             skipped_details.append(_skip_detail(v.name, "invalid_episode"))
             continue
-        added.append(layout.tv_filename(int(season_num), ep_ints, v.ext))
+        added.append(layout.tv_filename(int(season_num), ep_ints, v.ext, source_name=v.name))
     return added, skipped, skipped_details
 
 
@@ -624,7 +624,9 @@ def ingest(
         skipped_details: list[dict] = []
         if variety_matches and season_hint is not None:
             for m in variety_matches:
-                target = layout.tv_filename(season_hint, m.episode.number, m.file.ext)
+                target = layout.tv_filename(
+                    season_hint, m.episode.number, m.file.ext, source_name=m.file.name
+                )
                 planned.append(target)
                 plan_rows.append({
                     "episode": m.episode.number,
@@ -646,7 +648,11 @@ def ingest(
             )
         elif chosen.media_type == "movie":
             planned = [
-                layout.movie_filename(f.ext, part=(i + 1) if len(share_videos) > 1 else None)
+                layout.movie_filename(
+                    f.ext,
+                    part=(i + 1) if len(share_videos) > 1 else None,
+                    source_name=f.name,
+                )
                 for i, f in enumerate(share_videos)
             ]
         return IngestResult(
@@ -970,12 +976,18 @@ def ingest_folder(
         skipped_details: list[dict] = []
         if chosen.media_type == "movie":
             added = [
-                layout.movie_filename(v.ext, part=(i + 1) if len(videos) > 1 else None)
+                layout.movie_filename(
+                    v.ext,
+                    part=(i + 1) if len(videos) > 1 else None,
+                    source_name=v.name,
+                )
                 for i, v in enumerate(videos)
             ]
         elif variety_matches and season_hint is not None:
             for m in variety_matches:
-                target = layout.tv_filename(season_hint, m.episode.number, m.file.ext)
+                target = layout.tv_filename(
+                    season_hint, m.episode.number, m.file.ext, source_name=m.file.name
+                )
                 added.append(target)
                 planned.append({
                     "episode": m.episode.number,
@@ -1679,7 +1691,9 @@ def _finalize_movie(
     added_names: list[str] = []
     for i, v in enumerate(videos):
         new_name = layout.movie_filename(
-            v.ext, part=(i + 1) if len(videos) > 1 else None
+            v.ext,
+            part=(i + 1) if len(videos) > 1 else None,
+            source_name=v.name,
         )
         if new_name != v.name:
             qc.rename(v.fid, new_name)
@@ -1813,7 +1827,7 @@ def _finalize_tv(
 
             if any(e in existing_eps for e in ep_ints):
                 skipped.append(v.name)
-                target_name = layout.tv_filename(s, ep_ints, v.ext)
+                target_name = layout.tv_filename(s, ep_ints, v.ext, source_name=v.name)
                 action = "moved_to_rejected" if cfg.policy.rejected_dir_tv else "skipped"
                 skipped_details.append(
                     _skip_detail(
@@ -1831,7 +1845,7 @@ def _finalize_tv(
                     qc.move([v.fid], rej_fid)
                 continue
 
-            new_name = layout.tv_filename(s, ep_ints, v.ext)
+            new_name = layout.tv_filename(s, ep_ints, v.ext, source_name=v.name)
             if new_name != v.name:
                 qc.rename(v.fid, new_name)
             qc.move([v.fid], season_fid)
